@@ -1,4 +1,4 @@
-name: Release to GitHub
+name: Release to GitHub/PyPI
 on:
   workflow_dispatch:
     inputs:
@@ -29,8 +29,10 @@ jobs:
       - name: Run linters and build package
         run: |
           python3 -m pip install .[build]
+          echo "-----------------------------Running linters...------------------------------"
           python3 -m flake8
           python3 -m mypy
+          echo "-----------------------------Running build...--------------------------------"
           python3 -m build .
 
       - name: Extract package version and create git tag
