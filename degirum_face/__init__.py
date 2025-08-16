@@ -11,6 +11,19 @@ import degirum as dg
 import degirum_tools
 from typing import Optional, Tuple, Union
 
+
+def __dir__():
+    return [
+        "FaceTracking",
+        "AlertMode",
+        "ObjectMap",
+        "ReID_Database",
+        "FaceSearchGizmo",
+        "FaceExtractGizmo",
+        "ObjectAnnotateGizmo",
+    ]
+
+
 from degirum_tools.streams import (
     Composition,
     Watchdog,
