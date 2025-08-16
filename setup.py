@@ -12,12 +12,11 @@ setup(
     version=__version__,  # noqa
     description="DeGirum Face Recognition Package",
     author="DeGirum Corp",
+    license="MIT",
     author_email="support@degirum.com",
     url="https://github.com/DeGirum/degirum_face",
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
     ],
     python_requires=">=3.9",
     packages=find_packages(),
