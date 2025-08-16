@@ -1,0 +1,56 @@
+name: Release to GitHub
+on:
+  workflow_dispatch:
+    inputs:
+      to_github:
+        description: "Release to GitHub"
+        type: boolean
+        default: false
+      to_pypi:
+        description: "Release to pypi.org"
+        type: boolean
+        default: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Run linters and build package
+        run: |
+          python3 -m pip install .[build]
+          python3 -m flake8
+          python3 -m mypy
+          python3 -m build .
+
+      - name: Extract package version and create git tag
+        id: extract_package_version
+        run: |
+          wheel_file=$(find ${{ github.workspace }}/dist -name "*.whl" -print -quit)
+          package_version=${{ github.ref_name }}-v$(basename $wheel_file | sed 's/^[^-]*-\([^ -]*\).*/\1/')
+          echo "Package version tag: $package_version"
+          git tag $package_version
+          git push origin $package_version
+          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
+
+      - name: Release Python wheel to GitHub
+        if: ${{ github.event.inputs.to_github == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: ${{ github.workspace }}/dist/*.whl
+          tag_name: ${{ steps.extract_package_version.outputs.package_version }}
+
+      - name: Upload Python wheel to PyPI.org
+        if: ${{ github.event.inputs.to_pypi == 'true' }}
+        run: twine upload --verbose -u __token__ -p "${{ secrets.PYPI_PASSWORD }}" --non-interactive --disable-progress-bar dist/*.whl
