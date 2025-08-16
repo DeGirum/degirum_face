@@ -1,0 +1,27 @@
+#
+# face_tracking.yaml: configuration file for face_tracking.py web application example
+#
+# Copyright DeGirum Corporation 2025
+# All rights reserved
+#
+# This file is used to set up the parameters for the face tracking pipeline.
+# It includes model names, device configurations, video source, and notification settings.
+#
+
+hw_location: "@cloud"
+model_zoo_url: degirum/public
+face_detector_model_name: yolov8n_relu6_widerface_kpts--640x640_quant_n2x_orca1_1
+face_detector_model_devices: [0]
+face_reid_model_name: mbf_w600k--112x112_float_n2x_orca1_1
+face_reid_model_devices: [1]
+video_source: 0 # local camera
+db_filename: "temp/face_reid_db.lance"
+clip_duration: 100  # frames
+reid_expiration_frames: 10  # number of frames to repeat face reID
+credence_count: 4 # number of frames to consider face reID as valid
+# Apprise notification config string and message template
+notification_message: '{time}: **Unknown** person detected.'
+endpoint: ./temp  # endpoint url, or path to local folder for local storage
+access_key: ""  # access key for S3-compatible storage
+secret_key: ""  # secret key for S3-compatible storage
+bucket: unknown_faces # bucket name for S3-compatible storage or subdirectory name for local storage

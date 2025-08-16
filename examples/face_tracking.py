@@ -1,0 +1,604 @@
+#
+# face_tracking.py: Face Tracking Example Web Application
+#
+# Copyright DeGirum Corporation 2025
+# All rights reserved
+#
+# Implements NiceGUi web application for face tracking using DeGirum's face recognition package.
+# Provides a live stream of the camera feed, allows video clip annotation, and manages face reID.
+#
+
+
+import os, io, asyncio, urllib.parse, uuid, yaml
+
+import degirum_face
+from degirum_tools import MediaServer, ObjectStorageConfig
+from degirum_tools.streams import notification_config_console
+
+from typing import List
+from nicegui import ui, app, context
+from fastapi.responses import StreamingResponse, JSONResponse, Response
+from fastapi import Request
+
+
+#
+# Setting
+#
+hw_location = "localhost"
+model_zoo_url = "degirum/public"
+face_detector_model_name = "yolov8n_relu6_widerface_kpts--640x640_quant_n2x_orca1_1"
+face_detector_model_devices = None
+face_reid_model_name = "mbf_w600k--112x112_float_n2x_orca1_1"
+face_reid_model_devices = None
+video_source = 0
+db_filename = "face_reid_db.lance"
+zone = None
+clip_duration = 100  # frames
+reid_expiration_frames = 10  # number of frames to repeat face reID
+notification_config = notification_config_console
+notification_message = (
+    "{time}: Unknown person detected (saved video: [{filename}]({url})])"
+)
+credence_count = 3  # number of frames to consider face reID as valid
+endpoint = "./"  # endpoint url, or path to local folder for local storage
+access_key = ""  # access key for S3-compatible storage
+secret_key = ""  # secret key for S3-compatible storage
+bucket = "unknown_faces"  # bucket name for S3-compatible storage or subdirectory name for local storage
+
+
+#
+# Global variables
+#
+media_server = MediaServer()  # media server instance for RTSP streaming
+face_tracker: degirum_face.FaceTracking = (
+    None  # global variable to hold the FaceTracking instance
+)
+pipelines: List[tuple] = (
+    []
+)  # list of pipelines running face tracking and their watchdogs
+stream_url_path = "stream"  # URL path for RTSP streaming
+
+
+@app.on_startup
+def startup():
+    """Initialize the face tracking application on startup."""
+
+    # Load YAML settings from file and update existing globals
+    try:
+        with open("face_tracking.yaml", "r") as f:
+            settings = yaml.safe_load(f)
+
+        globals().update({k: v for k, v in settings.items() if k in globals()})
+    except Exception as e:
+        print(f"ERROR loading settings from YAML: {str(e)}, using default values.")
+
+    global face_tracker
+
+    face_tracker = degirum_face.FaceTracking(
+        hw_location=hw_location,
+        model_zoo_url=model_zoo_url,
+        face_detector_model_name=face_detector_model_name,
+        face_reid_model_name=face_reid_model_name,
+        clip_storage_config=ObjectStorageConfig(
+            endpoint=endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
+            bucket=bucket,
+        ),
+        db_filename=db_filename,
+    )
+
+    pipelines.append(
+        face_tracker.run_tracking_pipeline(
+            video_source,
+            zone=zone,
+            clip_duration=clip_duration,
+            reid_expiration_frames=reid_expiration_frames,
+            credence_count=credence_count,
+            alert_mode=degirum_face.AlertMode.ON_UNKNOWNS,
+            alert_once=True,
+            notification_config=notification_config,
+            notification_message=notification_message,
+            local_display=False,
+            stream_name=stream_url_path,
+        )
+    )
+
+
+@app.on_shutdown
+def cleanup():
+    """Cleanup function to stop the media server and pipelines."""
+
+    for composition, _ in pipelines:
+        composition.stop()
+
+    media_server.stop()  # stop the media server
+
+
+@ui.page("/health")
+def health_check():
+    """Health check endpoint."""
+
+    if not pipelines:
+        return JSONResponse(status_code=500, content={"status": "No pipelines running"})
+
+    ret = {"status": "ok", "pipelines": []}
+    status_code = 200
+
+    for i, (_, watchdog) in enumerate(pipelines):
+        running, fps = watchdog.check()
+        ret["pipelines"].append(
+            {
+                "id": i,
+                "running": running,
+                "fps": round(fps, 1),
+            }
+        )
+
+        if not running:
+            status_code = 500
+            ret["status"] = f"Pipeline {i} is not running"
+
+    return JSONResponse(status_code=status_code, content=ret)
+
+
+@ui.page("/")
+def main_page():
+
+    face_map = degirum_face.ObjectMap()
+    clips = face_tracker.list_clips()
+    known_objects = face_tracker.db.list_objects()
+
+    def sorted_known_objects():
+        """Return known objects sorted by their attributes."""
+        return sorted([str(a) for a in known_objects.values() if a])
+
+    #
+    # UI callbacks
+    #
+
+    async def delete_selected():
+        """Delete the selected video clips."""
+        selected = await clip_grid.get_selected_rows()
+        if not selected:
+            ui.notify("No rows selected")
+            return
+
+        selected_filenames = {r["file_name"] for r in selected}
+        for f in selected_filenames:
+            clip = clips.get(f.replace(".mp4", ""), {})
+            for v in clip.values():
+                face_tracker.remove_clip(v.object_name)
+
+        refresh_clips()
+
+    def show_hide_ann_controls(mode: str):
+        """Show or hide annotation controls according to the mode."""
+
+        if mode == "initial":
+            ann_spinner.visible = False
+            ann_grid.visible = False
+            update_db_button.visible = False
+            add_attr_button.visible = False
+            ann_button.visible = False
+        if mode == "original-clip":
+            ann_spinner.visible = False
+            ann_grid.visible = False
+            update_db_button.visible = False
+            add_attr_button.visible = False
+            ann_button.visible = True
+        elif mode == "annotation-in-progress":
+            ann_spinner.visible = True
+            ann_grid.visible = False
+            update_db_button.visible = False
+            add_attr_button.visible = False
+            ann_button.visible = False
+        elif mode == "annotated-clip":
+            ann_spinner.visible = False
+            ann_grid.visible = True
+            update_db_button.visible = True
+            add_attr_button.visible = True
+            ann_button.visible = False
+
+    async def on_clip_selected():
+        """Handle the selection of a video clip."""
+        selected = await clip_grid.get_selected_rows()
+        if not selected:
+            return
+
+        filename = selected[0]["file_name"]
+        file_stem, file_ext = os.path.splitext(filename)
+
+        clip_collection = clips.get(file_stem)
+        if not clip_collection:
+            return
+
+        clip = clip_collection.get("original")
+        if not clip:
+            return
+
+        video_player.source = f"/video/{clip.object_name}"
+        video_player.update()
+        show_hide_ann_controls("original-clip")
+        ann_button.visible = True
+        annotation_label.text = (
+            f"Selected: {filename}.\nClick `Annotate` to start annotation."
+        )
+
+    async def annotate_clip():
+        """Annotate the selected video clip."""
+        selected = await clip_grid.get_selected_rows()
+        if not selected:
+            ui.notify("No rows selected")
+            return
+
+        try:
+            filename = selected[0]["file_name"]
+            file_stem, file_ext = os.path.splitext(filename)
+
+            clip_collection = clips.get(file_stem)
+            if not clip_collection:
+                ui.notify(f"Clip {filename} not found")
+                return
+
+            clip = clip_collection.get("original")
+            if not clip:
+                ui.notify(f"Original clip {filename} not found")
+                return
+
+            show_hide_ann_controls("annotation-in-progress")
+
+            annotation_label.text = f"Annotating {filename}..."
+
+            nonlocal face_map
+            face_map = await asyncio.to_thread(
+                face_tracker.run_clip_analysis, clip, zone
+            )
+
+            annotation_label.text = f"{filename}: {len(face_map.map)} face(s) detected"
+
+            annotated_filename = (
+                file_stem + degirum_face.FaceTracking.annotated_video_suffix + file_ext
+            )
+            clip_url = f"/video/{annotated_filename}"
+            video_player.source = clip_url
+
+            ann_rows = [
+                {"id": face.track_id, "attributes": face.attributes or ""}
+                for face in face_map.map.values()
+            ]
+
+            ann_grid.options["rowData"] = ann_rows
+            ann_grid.update()
+            refresh_clips()
+
+        finally:
+            show_hide_ann_controls("annotated-clip")
+
+    async def update_embeddings_in_db():
+        """Update the attributes from the annotation table to the database."""
+
+        await ann_grid.load_client_data()  # updates grid.options["rowData"]
+        updated = ann_grid.options["rowData"]  # now contains the latest data
+        msg = ""
+        for row in updated:
+            track_id = row["id"]
+            attr = row["attributes"]
+            if not attr:
+                continue  # Skip empty attributes
+
+            face = face_map.get(track_id)
+
+            # find the object ID in the known objects list
+
+            obj_id = next(
+                (id for id, a in known_objects.items() if str(a) == str(attr)), None
+            )
+
+            # add embeddings
+            face_tracker.db.add_embeddings(obj_id, face.embeddings, dedup=True)
+            msg += f"{attr}: {len(face.embeddings)} embeddings\n"
+
+        ui.notify("Database updated:\n" + msg, multi_line=True)
+
+    async def on_confirm_new_attribute():
+        """Handle the Add Attribute dialog"""
+        attr = new_attr_input.value.strip()
+        if attr:
+            if any(attr == str(a) for a in known_objects.values()):
+                ui.notify("Attribute already exists")
+            else:
+                obj_id = str(uuid.uuid4())
+                known_objects[obj_id] = attr
+                face_tracker.db.add_object(obj_id, attr)
+                ann_grid.options["columnDefs"][1]["cellEditorParams"] = {
+                    "values": sorted_known_objects()
+                }
+                ann_grid.update()
+                ui.notify(f"Added attribute: {attr}")
+        add_attr_dialog.close()
+
+    async def db_info_dialog_open():
+        """Open the dialog showing the embeddings DB info."""
+
+        counts = sorted(
+            face_tracker.db.count_embeddings().values(), key=lambda x: str(x[1])
+        )
+        rows = [
+            {
+                "attributes": str(c[1]),
+                "counts": c[0],
+            }
+            for c in counts
+        ]
+
+        db_info_grid.options["rowData"] = rows
+        db_info_grid.update()
+        db_info_dialog.open()
+
+    def refresh_clips():
+        """Refresh the main page."""
+
+        nonlocal clips
+        clips = face_tracker.list_clips()
+        clip_rows = [
+            {
+                "created": clip["original"]
+                .last_modified.astimezone()
+                .strftime("%Y-%m-%d %H:%M:%S"),
+                "file_name": clip["original"].object_name,
+                "annotated": "✅ viewed" if "annotated" in clip else "",
+            }
+            for clip in clips.values()
+        ]
+        clip_grid.options["rowData"] = clip_rows
+        clip_grid.update()
+
+    async def refresh_clips_async():
+        refresh_clips()
+
+    #
+    # dialog for adding new attributes
+    #
+    add_attr_dialog = ui.dialog()
+    with add_attr_dialog, ui.card():
+        ui.label("Enter new attribute:")
+        new_attr_input = ui.input(placeholder="new person name").classes("w-64")
+
+        with ui.row():
+            ui.button("✔ Confirm", on_click=on_confirm_new_attribute)
+            ui.button("✖ Cancel", on_click=add_attr_dialog.close).props(
+                "color=negative"
+            )
+
+    #
+    # dialog for showing embeddings DB info
+    #
+    db_info_dialog = ui.dialog()
+    with db_info_dialog, ui.card().classes("w-full max-w-lg"):
+
+        db_info_grid = (
+            ui.aggrid(
+                {
+                    "columnDefs": [
+                        {
+                            "headerName": "Person",
+                            "field": "attributes",
+                            "sortable": True,
+                        },
+                        {
+                            "headerName": "Embedding Counts",
+                            "field": "counts",
+                            "sortable": True,
+                            "maxWidth": 150,
+                            "resizable": False,
+                        },
+                    ],
+                    "defaultColDef": {
+                        "resizable": True,
+                        "sortable": True,
+                        "filter": True,
+                    },
+                },
+            )
+            .classes("w-full")
+            .style("flex-grow: 1")
+        )
+
+        ui.button("✔ OK", on_click=db_info_dialog.close)
+
+    #
+    # Main page layout
+    #
+    with ui.column().classes("h-screen w-screen"):
+
+        ui.button(
+            "▶ Open Live Stream",
+            on_click=lambda: ui.navigate.to("/stream", new_tab=True),
+        )
+
+        with ui.row().classes("w-full h-[calc(100vh-8rem)]"):
+
+            # Left side: video clips list card
+            with ui.card().classes(
+                "w-full h-[calc(100vh-8rem)] max-w-lg border border-gray-300 p-4"
+            ):
+                ui.label("Video Clips of Captured Events").classes(
+                    "text-xl font-bold mb-4"
+                )
+
+                clip_grid = (
+                    ui.aggrid(
+                        {
+                            "columnDefs": [
+                                {
+                                    "headerName": "Created",
+                                    "field": "created",
+                                    "checkboxSelection": True,
+                                    "sort": "desc",
+                                },
+                                {
+                                    "headerName": "File Name",
+                                    "field": "file_name",
+                                },
+                                {
+                                    "headerName": "Viewed",
+                                    "field": "annotated",
+                                    "maxWidth": 150,
+                                    "resizable": False,
+                                },
+                            ],
+                            "defaultColDef": {
+                                "resizable": True,
+                                "sortable": True,
+                                "filter": True,
+                            },
+                            "rowSelection": "multiple",
+                        },
+                    )
+                    .classes("w-full")
+                    .style("flex-grow: 1")
+                ).on("selectionChanged", on_clip_selected)
+
+                with ui.row():
+                    ui.button("ℹ DB Info", on_click=db_info_dialog_open)
+                    ui.button("✖ Delete Selected", on_click=delete_selected).props(
+                        "color=negative"
+                    )
+                    ui.button("⟳ Refresh", on_click=refresh_clips_async)
+
+            # Middle: Annotation card and video player
+            with ui.card().classes("w-full max-w-lg border border-gray-300 p-4"):
+                annotation_label = (
+                    ui.label("Select a clip to view/annotate")
+                    .classes("text-xl font-bold mb-4")
+                    .style("white-space: pre-wrap")
+                )
+
+                # Annotation spinner
+                ann_spinner = (
+                    ui.spinner(size="lg")
+                    .props("color=primary")
+                    .classes("absolute top-1/2 left-1/2")
+                )
+
+                # Video player
+                video_player = ui.video(src="").classes("w-full h-full")
+
+                # Annotation button
+                ann_button = ui.button("🖉 Annotate", on_click=annotate_clip)
+
+                # Annotation grid
+                ann_grid = ui.aggrid(
+                    {
+                        "rowData": [],
+                        "columnDefs": [
+                            {
+                                "headerName": "Track ID",
+                                "field": "id",
+                                "sortable": True,
+                                "filter": True,
+                            },
+                            {
+                                "headerName": "Person",
+                                "field": "attributes",
+                                "editable": True,
+                                "cellEditor": "agSelectCellEditor",
+                                "cellEditorParams": {
+                                    "values": sorted_known_objects(),
+                                },
+                                "sortable": True,
+                                "filter": True,
+                            },
+                        ],
+                        "defaultColDef": {
+                            "resizable": True,
+                            "sortable": True,
+                            "filter": True,
+                        },
+                        "stopEditingWhenCellsLoseFocus": True,
+                        "singleClickEdit": True,
+                    }
+                ).classes("w-full")
+
+                with ui.row():
+                    # Add attribute dialog button
+                    add_attr_button = ui.button(
+                        "✛ New Person", on_click=add_attr_dialog.open
+                    )
+
+                    # Update database button
+                    update_db_button = ui.button(
+                        "✔ Add Embeddings to DB", on_click=update_embeddings_in_db
+                    ).props("color=negative")
+
+    show_hide_ann_controls("initial")
+    refresh_clips()
+
+
+@ui.page("/stream")
+def stream_page():
+    """Page to display the live stream of the face tracking application."""
+
+    host = context.client.request.headers.get("host", "localhost")
+    stream_url = f"http://{host.split(':')[0]}:8888/{stream_url_path}"
+    ui.label("Live Stream").classes("text-xl font-bold mb-4")
+    ui.element("iframe").props(f'src="{stream_url}"').classes(
+        "w-[90%] mx-auto h-[calc(90vh)]"
+    )
+
+
+@ui.page("/video/{filename}")
+async def serve_video(request: Request, filename: str):
+    """Serve video with support for HTTP Range requests."""
+
+    # Unquote filename (in case it has URL-encoded characters)
+    filename = urllib.parse.unquote(filename)
+
+    # Download full video into memory (later we can optimize this)
+    video_bytes = face_tracker.download_clip(filename)
+    file_size = len(video_bytes)
+
+    # Extract Range header (e.g. 'bytes=0-')
+    range_header = request.headers.get("range")
+    content_type = "video/mp4"
+
+    if range_header:
+        # Parse start and end values
+        range_value = range_header.strip().lower().replace("bytes=", "")
+        start_str, end_str = range_value.split("-")
+        start = int(start_str) if start_str else 0
+        end = int(end_str) if end_str else file_size - 1
+        end = min(end, file_size - 1)  # Don't exceed file size
+
+        # Slice the requested byte range
+        chunk = video_bytes[start : end + 1]
+        content_length = len(chunk)
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(content_length),
+            "Content-Type": content_type,
+        }
+
+        return Response(content=chunk, status_code=206, headers=headers)
+
+    # No Range header — send full content
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(file_size),
+        "Content-Type": content_type,
+    }
+
+    return StreamingResponse(
+        io.BytesIO(video_bytes), headers=headers, media_type=content_type
+    )
+
+
+# Run the NiceGUI application
+# Note: `workers=1` because lancedb is not multi-process-safe
+try:
+    ui.run(title="Face Tracking", workers=1, reload=False, show=False)
+except KeyboardInterrupt:
+    print("Shutting down the application...")
