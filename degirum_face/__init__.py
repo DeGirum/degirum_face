@@ -84,19 +84,9 @@ class FaceTracking:
         self._face_reid_model_name = face_reid_model_name
         self._face_reid_model_devices = face_reid_model_devices
         self._clip_storage_config = clip_storage_config
-        self._db_filename = db_filename
         self._token = token
-        self.db: Optional[ReID_Database] = None
-        self._open_db()
 
-    def _open_db(self):
-        """
-        Open the database for face reID.
-        If the database does not exist, create it.
-        """
-        if self.db is None:
-            self.db = ReID_Database(self._db_filename)
-        return self.db
+        self.db = ReID_Database(db_filename)
 
     def _load_models(
         self, zone: Optional[list], reid_expiration_frames: int
@@ -270,7 +260,7 @@ class FaceTracking:
 
             # face reID search gizmo
             face_search = FaceSearchGizmo(
-                face_map, self._open_db(), credence_count=1, accumulate_embeddings=True
+                face_map, self.db, credence_count=1, accumulate_embeddings=True
             )
 
             # object annotator gizmo
@@ -412,7 +402,7 @@ class FaceTracking:
         # face reID search gizmo
         face_search = FaceSearchGizmo(
             face_map,
-            self._open_db(),
+            self.db,
             credence_count=credence_count,
             alert_mode=alert_mode,
             alert_once=alert_once,

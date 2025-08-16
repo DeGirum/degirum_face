@@ -1,13 +1,17 @@
 #
-# face_tracking.py: Face Tracking Example Web Application
+# face_tracking_web_app.py: Face Tracking Example Web Application
 #
 # Copyright DeGirum Corporation 2025
 # All rights reserved
 #
 # Implements NiceGUi web application for face tracking using DeGirum's face recognition package.
-# Provides a live stream of the camera feed, allows video clip annotation, and manages face reID.
+# Provides a live stream of the camera feed, allows video clip annotation, and manages face reID database.
+# You can configure all the settings in the `face_tracking.yaml` file.
 #
-
+# Pre-requisites:
+# - Install NiceGUI: `pip install nicegui`
+# - Install DeGirum Face SDK: `pip install degirum-face`
+#
 
 import os, io, asyncio, urllib.parse, uuid, yaml
 
@@ -15,14 +19,14 @@ import degirum_face
 from degirum_tools import MediaServer, ObjectStorageConfig
 from degirum_tools.streams import notification_config_console
 
-from typing import List
+from typing import List, Optional
 from nicegui import ui, app, context
 from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi import Request
 
 
 #
-# Setting
+# Setting (see `face_tracking.yaml` for detailed comments):
 #
 hw_location = "localhost"
 model_zoo_url = "degirum/public"
@@ -33,30 +37,34 @@ face_reid_model_devices = None
 video_source = 0
 db_filename = "face_reid_db.lance"
 zone = None
-clip_duration = 100  # frames
-reid_expiration_frames = 10  # number of frames to repeat face reID
+clip_duration = 100
+reid_expiration_frames = 10
 notification_config = notification_config_console
 notification_message = (
     "{time}: Unknown person detected (saved video: [{filename}]({url})])"
 )
-credence_count = 3  # number of frames to consider face reID as valid
-endpoint = "./"  # endpoint url, or path to local folder for local storage
-access_key = ""  # access key for S3-compatible storage
-secret_key = ""  # secret key for S3-compatible storage
-bucket = "unknown_faces"  # bucket name for S3-compatible storage or subdirectory name for local storage
+credence_count = 4
+endpoint = "./"
+access_key = ""
+secret_key = ""
+bucket = "unknown_faces"
 
 
 #
 # Global variables
 #
-media_server = MediaServer()  # media server instance for RTSP streaming
-face_tracker: degirum_face.FaceTracking = (
-    None  # global variable to hold the FaceTracking instance
-)
-pipelines: List[tuple] = (
-    []
-)  # list of pipelines running face tracking and their watchdogs
-stream_url_path = "stream"  # URL path for RTSP streaming
+
+# media server instance for RTSP streaming
+media_server = MediaServer()
+
+# global variable to hold the FaceTracking instance
+face_tracker: degirum_face.FaceTracking
+
+# list of pipelines running face tracking and their watchdogs
+pipelines: List[tuple] = []
+
+# URL path for RTSP streaming
+stream_url_path = "stream"
 
 
 @app.on_startup
@@ -72,13 +80,15 @@ def startup():
     except Exception as e:
         print(f"ERROR loading settings from YAML: {str(e)}, using default values.")
 
-    global face_tracker
+    global face_tracker, pipelines
 
     face_tracker = degirum_face.FaceTracking(
         hw_location=hw_location,
         model_zoo_url=model_zoo_url,
         face_detector_model_name=face_detector_model_name,
+        face_detector_model_devices=face_detector_model_devices,
         face_reid_model_name=face_reid_model_name,
+        face_reid_model_devices=face_reid_model_devices,
         clip_storage_config=ObjectStorageConfig(
             endpoint=endpoint,
             access_key=access_key,
@@ -109,6 +119,7 @@ def startup():
 def cleanup():
     """Cleanup function to stop the media server and pipelines."""
 
+    global pipelines
     for composition, _ in pipelines:
         composition.stop()
 
@@ -119,15 +130,18 @@ def cleanup():
 def health_check():
     """Health check endpoint."""
 
+    global pipelines
+
     if not pipelines:
         return JSONResponse(status_code=500, content={"status": "No pipelines running"})
 
-    ret = {"status": "ok", "pipelines": []}
+    status = "ok"
+    pipeline_states = []
     status_code = 200
 
     for i, (_, watchdog) in enumerate(pipelines):
         running, fps = watchdog.check()
-        ret["pipelines"].append(
+        pipeline_states.append(
             {
                 "id": i,
                 "running": running,
@@ -137,9 +151,12 @@ def health_check():
 
         if not running:
             status_code = 500
-            ret["status"] = f"Pipeline {i} is not running"
+            status = f"Pipeline {i} is not running"
 
-    return JSONResponse(status_code=status_code, content=ret)
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": status, "pipelines": pipeline_states},
+    )
 
 
 @ui.page("/")
@@ -288,12 +305,15 @@ def main_page():
                 continue  # Skip empty attributes
 
             face = face_map.get(track_id)
+            if face is None:
+                continue
 
             # find the object ID in the known objects list
-
             obj_id = next(
                 (id for id, a in known_objects.items() if str(a) == str(attr)), None
             )
+            if obj_id is None:
+                continue
 
             # add embeddings
             face_tracker.db.add_embeddings(obj_id, face.embeddings, dedup=True)
@@ -540,6 +560,7 @@ def main_page():
 def stream_page():
     """Page to display the live stream of the face tracking application."""
 
+    assert context.client.request
     host = context.client.request.headers.get("host", "localhost")
     stream_url = f"http://{host.split(':')[0]}:8888/{stream_url_path}"
     ui.label("Live Stream").classes("text-xl font-bold mb-4")
