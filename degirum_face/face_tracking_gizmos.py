@@ -307,6 +307,13 @@ class FaceExtractGizmo(Gizmo):
                     # no track ID - skip reID
                     continue
 
+                # apply filtering based on face landmark location
+                keypoints = [np.array(lm["landmark"]) for lm in landmarks]
+                if not self.face_is_frontal(keypoints) or self.face_is_shifted(
+                    r["bbox"], keypoints
+                ):
+                    continue  # skip if the face is not frontal or is shifted
+
                 # apply filtering based on the face reID map
                 if self._face_reid_map is not None:
                     face_status = self._face_reid_map.get(track_id)
@@ -334,13 +341,6 @@ class FaceExtractGizmo(Gizmo):
                         face_status.last_reid_frame = frame_id
                         face_status.next_reid_frame = frame_id + delta
                     self._face_reid_map.put(track_id, face_status)
-
-                keypoints = [np.array(lm["landmark"]) for lm in landmarks]
-
-                if not self.face_is_frontal(keypoints) or self.face_is_shifted(
-                    r["bbox"], keypoints
-                ):
-                    continue  # skip if the face is not frontal or is shifted
 
                 crop_img = FaceExtractGizmo.face_align_and_crop(
                     data.data, keypoints, self._image_size
@@ -400,7 +400,7 @@ class FaceExtractGizmo(Gizmo):
             landmarks (List[np.ndarray]): List of keypoints (landmarks) as (x, y) coordinates
 
         Returns:
-            bool: True if the face is shifted to the corner of bbox, False otherwise.
+            bool: True if the face is shifted to a side of bbox, False otherwise.
         """
 
         assert len(bbox) == 4
