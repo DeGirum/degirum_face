@@ -145,7 +145,7 @@ def health_check():
 @ui.page("/")
 def main_page():
 
-    face_map = degirum_face.ObjectMap()
+    face_map = degirum_face.ObjectMap[degirum_face.FaceStatus]()
     clips = face_tracker.list_clips()
     known_objects = face_tracker.db.list_objects()
 
