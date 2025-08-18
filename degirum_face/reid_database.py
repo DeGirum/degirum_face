@@ -174,6 +174,33 @@ class ReID_Database:
                 if data:
                     table.add(data)
 
+    def get_id_by_attributes(self, attributes: Any) -> Optional[str]:
+        """
+        Get object ID by its attributes.
+
+        Args:
+            attributes (Any): The attributes of the object.
+
+        Returns:
+            Optional[str]: The object ID or None if not found.
+        """
+
+        with self._lock:
+            attributes_table, _ = self._open_table(ReID_Database.tbl_attributes)
+            if attributes_table is None:
+                return None
+
+            # query the attributes table for the object ID
+            result = (
+                attributes_table.search()
+                .where(f"{ReID_Database.key_attributes} == '{attributes}'")
+                .to_list()
+            )
+            if result:
+                return result[0][ReID_Database.key_object_id]
+
+            return None
+
     def get_attributes_by_id(self, object_id: np.ndarray) -> Optional[Any]:
         """
         Get object attributes by object ID

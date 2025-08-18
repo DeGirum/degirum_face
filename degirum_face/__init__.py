@@ -9,7 +9,7 @@ import os
 import tempfile
 import degirum as dg
 import degirum_tools
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 
 def __dir__():
@@ -138,11 +138,14 @@ class FaceTracking:
 
         return face_detect_model, face_reid_model
 
-    def list_clips(self):
+    def list_clips(self) -> Dict[str, dict]:
         """
         List the video clips in the storage.
-        Returns a dictionary where the key is the clip filename and value is the list of
-            video clip file objects (of minio.Object type) associated with that clip (original video clip, JSON annotations, annotated video clip)
+        Returns a dictionary where the key is the clip filename and value is the dict of
+            video clip file objects (of minio.Object type) associated with that clip
+            original video clip: "original" key,
+            JSON annotations: "json" key,
+            annotated video clip: "annotated" key
         """
 
         ret: dict = {}
@@ -280,9 +283,10 @@ class FaceTracking:
             ).start()
 
             # upload the annotated video to the object storage
-            storage.upload_file_to_object_storage(
-                output_video_local_path, out_object_name
-            )
+            if save_annotated:
+                storage.upload_file_to_object_storage(
+                    output_video_local_path, out_object_name
+                )
 
             # compute K-means clustering on the embeddings
             for id, face in face_map.map.items():
