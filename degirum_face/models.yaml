@@ -1,0 +1,176 @@
+# DeGirum Face Detection Models Configuration
+# Single source of truth - all information derived from model entries
+
+# All available models with complete metadata
+models:
+  # Hailo8 models
+  yolov8n_relu6_widerface_kpts--640x640_quant_hailort_hailo8_1:
+    description: "YOLOv8 nano face detection with keypoints for Hailo-8"
+    task: "face_detection"
+    hardware: "hailo8"
+    zoo_url: "degirum/hailo"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [640, 640]
+    quantization: "int8"
+    is_default: true  # Default for hailo8 + face_detection
+    
+  arcface_mobilefacenet--112x112_quant_hailort_hailo8_1:
+    description: "ArcFace MobileFaceNet for face recognition on Hailo-8"
+    task: "face_recognition"
+    hardware: "hailo8"
+    zoo_url: "degirum/hailo"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [112, 112]
+    quantization: "int8"
+    is_default: true  # Default for hailo8 + face_recognition
+    
+  # Hailo8L models
+  yolov8n_relu6_widerface_kpts--640x640_quant_hailort_hailo8l_1:
+    description: "YOLOv8 nano face detection with keypoints for Hailo-8L"
+    task: "face_detection"
+    hardware: "hailo8l"
+    zoo_url: "degirum/hailo"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [640, 640]
+    quantization: "int8"
+    is_default: true
+    
+  arcface_mobilefacenet--112x112_quant_hailort_hailo8l_1:
+    description: "ArcFace MobileFaceNet for face recognition on Hailo-8L"
+    task: "face_recognition"
+    hardware: "hailo8l"
+    zoo_url: "degirum/hailo"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [112, 112]
+    quantization: "int8"
+    is_default: true
+    
+  # DeepX models
+  yolov8n_relu6_widerface_kpts--640x640_quant_deepx_m1a_1:
+    description: "YOLOv8 nano face detection with keypoints for DeepX"
+    task: "face_detection"
+    hardware: "deepx"
+    zoo_url: "degirum/deepx"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [640, 640]
+    quantization: "int8"
+    is_default: true
+    
+  # Axelera Metis models
+  yolov8n_relu6_widerface_kpts--640x640_quant_axelera_metis_1:
+    description: "YOLOv8 nano face detection with keypoints for Axelera Metis"
+    task: "face_detection"
+    hardware: "axelera_metis"
+    zoo_url: "degirum/axelera"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [640, 640]
+    quantization: "int8"
+    is_default: true
+    
+  arcface_mobilefacenet--112x112_quant_axelera_metis_1:
+    description: "ArcFace MobileFaceNet for face recognition on Axelera Metis"
+    task: "face_recognition"
+    hardware: "axelera_metis"
+    zoo_url: "degirum/axelera"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [112, 112]
+    quantization: "int8"
+    is_default: true
+    
+  # Google Coral models
+  yolov8n_relu6_widerface_kpts--640x640_quant_tflite_edgetpu_1:
+    description: "YOLOv8 nano face detection with keypoints for Google Coral TPU"
+    task: "face_detection"
+    hardware: "google_coral"
+    zoo_url: "degirum/google"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [640, 640]
+    quantization: "int8"
+    is_default: true
+    
+  # DeGirum Orca models
+  yolov8n_relu6_widerface_kpts--640x640_quant_n2x_orca1_1:
+    description: "YOLOv8 nano face detection with keypoints for DeGirum Orca"
+    task: "face_detection"
+    hardware: "degirum_orca"
+    zoo_url: "degirum/degirum"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [640, 640]
+    quantization: "int8"
+    is_default: true
+    
+  arcface_mobilefacenet--112x112_quant_n2x_orca1_1:
+    description: "ArcFace MobileFaceNet for face recognition on DeGirum Orca"
+    task: "face_recognition"
+    hardware: "degirum_orca"
+    zoo_url: "degirum/degirum"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [112, 112]
+    quantization: "int8"
+    is_default: true
+    
+  # Rockchip RK3588 models
+  yolov8n_relu6_widerface_kpts--640x640_quant_rknn_rk3588_1:
+    description: "YOLOv8 nano face detection with keypoints for RK3588 NPU"
+    task: "face_detection"
+    hardware: "rknn3588"
+    zoo_url: "degirum/rockchip"
+    performance: "fast"
+    accuracy: "good"
+    input_size: [640, 640]
+    quantization: "int8"
+    is_default: true
+    
+  
+
+# Optional: Static metadata that doesn't change
+task_definitions:
+  face_detection:
+    description: "Detect faces in images and return bounding boxes with landmarks"
+    output_format: "bbox, confidence, landmarks"
+  face_recognition:
+    description: "Generate face embeddings for recognition and verification"
+    output_format: "embedding_vector"
+  face_verification:
+    description: "Compare two faces for similarity"
+    output_format: "similarity_score"
+  face_analysis:
+    description: "Analyze face attributes like age, gender, emotion"
+    output_format: "attributes_dict"
+
+hardware_definitions:
+  hailo8:
+    description: "Hailo-8 AI processor"
+  hailo8l:
+    description: "Hailo-8L AI processor"
+  deepx:
+    description: "DeepX AI accelerator"
+  axelera_metis:
+    description: "Axelera Metis AI processor"
+  google_coral:
+    description: "Google Coral Edge TPU"
+  degirum_orca:
+    description: "DeGirum Orca AI processor"
+  cpu:
+    description: "CPU inference"
+  rknn3588:
+    description: "Rockchip RK3588 NPU"
+
+# Inference host addresses (where models run)
+inference_hosts:
+  "@cloud":
+    description: "DeGirum cloud infrastructure"
+  "@local":
+    description: "Local hardware deployment"
+  "localhost":
+    description: "Local DeGirum runtime"

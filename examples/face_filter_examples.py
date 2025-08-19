@@ -5,13 +5,26 @@ This example demonstrates how to use the new filtering architecture for better
 reusability and modularity.
 """
 
-from degirum_face.face_tracking_gizmos import (
-    FaceFilter,
-    FaceFilterConfig,
-    FaceExtractGizmo,
-    ObjectMap,
-)
-from degirum_face.face_data import FaceStatus
+import sys
+import os
+from pathlib import Path
+
+# Add the parent directory to the path so we can import degirum_face
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+# Now import the modules
+try:
+    from degirum_face.face_filters import FaceFilter, FaceFilterConfig
+    from degirum_face.face_tracking_gizmos import FaceExtractGizmo
+    from degirum_face.face_tracking_utils import ObjectMap
+    from degirum_face.face_data import FaceStatus
+except ImportError as e:
+    print(f"Import error: {e}")
+    print(f"Make sure you're running this from the project directory.")
+    print(f"Project root: {project_root}")
+    print(f"Python path: {sys.path}")
+    sys.exit(1)
 
 
 # Example 1: Using FaceFilter independently

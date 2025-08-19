@@ -1,9 +1,78 @@
-#
-# Face tracking application package
-# Copyright DeGirum Corp. 2025
-#
-# Implements various classes and functions for face tracking application development
-#
+"""
+DeGirum Face Tracking Application Package
+
+A comprehensive face tracking and recognition system built on the DeGirum AI platform.
+Provides real-time face detection, recognition, and monitoring capabilities with
+advanced filtering, database management, and video analytics.
+
+Key Features:
+    - Real-time face detection and tracking across video streams
+    - Face recognition with ReID (Re-Identification) capabilities
+    - Face embedding generation for recognition and verification
+    - Comprehensive face filtering system (size, orientation, zones)
+    - Persistent face database with embeddings storage
+    - Video clip extraction and storage for detected faces
+    - Multi-device model distribution for scalable performance
+    - Zone-based monitoring with spatial filtering
+
+Core Components:
+    - FaceTracking: Main orchestrator class for face tracking pipelines
+    - FaceDetector: Clean API for face detection with auto model selection
+    - FaceEmbedder: Face embedding generation and verification API
+    - Face ReID: Advanced re-identification using facial embeddings
+    - Video Processing: Stream-based gizmo architecture for real-time processing
+    - Database Management: Persistent storage of face embeddings and metadata
+
+Architecture:
+    The system follows a streaming gizmo pattern where each component processes
+    video frames in a pipeline. Key gizmos include:
+
+    - VideoSourceGizmo: Captures video from cameras/files
+    - FaceExtractGizmo: Detects and extracts faces from frames
+    - FaceSearchGizmo: Performs face recognition against database
+    - ObjectAnnotateGizmo: Adds visual annotations to video
+    - VideoSaverGizmo: Saves annotated video clips
+
+Usage Examples:
+    >>> # Face Detection
+    >>> detector = FaceDetector("hailo8")
+    >>> results = detector.detect("image.jpg")
+    >>>
+    >>> # Face Embedding
+    >>> embedder = FaceEmbedder("hailo8")
+    >>> embedding = embedder.embed("face.jpg")
+    >>> verification = embedder.verify_faces("person1.jpg", "person2.jpg")
+    >>>
+    >>> # Initialize face tracking system
+    >>> tracker = FaceTracking(
+    ...     hw_location="@cloud",
+    ...     model_zoo_url="degirum/public",
+    ...     face_detector_model_name="yolo_v8n_face_det",
+    ...     face_reid_model_name="arcface_resnet50",
+    ...     clip_storage_config=storage_config,
+    ...     db_filename="faces.db"
+    ... )
+    >>>
+    >>> # Start tracking from video source
+    >>> composition = tracker.track_faces_from_video(
+    ...     input_video="camera_feed.mp4",
+    ...     output_dir="./results"
+    ... )
+
+Performance Considerations:
+    - Supports multi-GPU deployment for high-throughput scenarios
+    - Configurable model distribution across available devices
+    - Optimized gizmo pipeline minimizes latency and memory usage
+    - Face filtering reduces computational load by early rejection
+
+Integration Points:
+    - DeGirum model zoo for AI model management
+    - Object storage systems for video clip archival
+    - External databases for face metadata and analytics
+    - REST APIs for real-time monitoring and control
+
+Copyright DeGirum Corp. 2025
+"""
 
 import os
 import tempfile
@@ -24,16 +93,268 @@ from degirum_tools.streams import (
 )
 
 from .face_tracking_gizmos import (
-    ObjectMap,
     FaceSearchGizmo,
     FaceExtractGizmo,
     ObjectAnnotateGizmo,
-    AlertMode,
 )
+from .face_data import FaceStatus, AlertMode
+from .face_tracking_utils import ObjectMap, TrackFilter
+from .face_filters import FaceFilterConfig
 from .reid_database import ReID_Database
+from .face_detector import FaceDetector, detect_faces
+from .face_embedder import FaceEmbedder, embed_face, verify_faces
+from .face_recognition import (
+    FaceRecognition,
+    EnrollmentResult,
+    RecognitionResult,
+    FaceQualityMetrics,
+)
+from .pipeline_config import PipelineModelConfig, ModelSpec
+from .model_config import get_model_config
+
+
+# Package-level convenience functions for model and hardware discovery
+def get_supported_hardware() -> list:
+    """
+    Get list of all supported hardware devices across all tasks.
+
+    Returns:
+        List of hardware device names (e.g., ["hailo8", "degirum_orca", "cpu"])
+
+    Example:
+        >>> import degirum_face
+        >>> hardware_list = degirum_face.get_supported_hardware()
+        >>> print(f"Supported hardware: {hardware_list}")
+    """
+    config = get_model_config()
+    return config.get_all_hardware()
+
+
+def get_supported_tasks() -> list:
+    """
+    Get list of all supported AI tasks.
+
+    Returns:
+        List of task names (e.g., ["face_detection", "face_recognition"])
+
+    Example:
+        >>> import degirum_face
+        >>> tasks = degirum_face.get_supported_tasks()
+        >>> print(f"Available tasks: {tasks}")
+    """
+    config = get_model_config()
+    return config.get_all_tasks()
+
+
+def get_hardware_for_task(task: str) -> list:
+    """
+    Get list of hardware devices that support a specific task.
+
+    Args:
+        task: Task name (e.g., "face_detection", "face_recognition")
+
+    Returns:
+        List of hardware device names that support the task
+
+    Example:
+        >>> import degirum_face
+        >>> hardware = degirum_face.get_hardware_for_task("face_recognition")
+        >>> print(f"Hardware supporting face recognition: {hardware}")
+    """
+    config = get_model_config()
+    return config.get_hardware_for_task(task)
+
+
+def get_tasks_for_hardware(hardware: str) -> list:
+    """
+    Get list of tasks supported by a specific hardware device.
+
+    Args:
+        hardware: Hardware device name (e.g., "hailo8", "degirum_orca")
+
+    Returns:
+        List of task names supported by the hardware
+
+    Example:
+        >>> import degirum_face
+        >>> tasks = degirum_face.get_tasks_for_hardware("hailo8")
+        >>> print(f"Tasks supported by hailo8: {tasks}")
+    """
+    config = get_model_config()
+    return config.get_tasks_for_hardware(hardware)
+
+
+def get_available_models(task: str = None, hardware: str = None) -> list:
+    """
+    Get list of available models, optionally filtered by task and/or hardware.
+
+    Args:
+        task: Optional task filter (e.g., "face_detection", "face_recognition")
+        hardware: Optional hardware filter (e.g., "hailo8", "degirum_orca")
+
+    Returns:
+        List of model names matching the filters
+
+    Examples:
+        >>> import degirum_face
+        >>> # All models
+        >>> all_models = degirum_face.get_available_models()
+        >>>
+        >>> # Face detection models only
+        >>> detection_models = degirum_face.get_available_models(task="face_detection")
+        >>>
+        >>> # Hailo8 models only
+        >>> hailo8_models = degirum_face.get_available_models(hardware="hailo8")
+        >>>
+        >>> # Face recognition models for Hailo8
+        >>> models = degirum_face.get_available_models(task="face_recognition", hardware="hailo8")
+    """
+    config = get_model_config()
+
+    if task and hardware:
+        return config.get_models_for_task_and_hardware(task, hardware)
+    elif task:
+        return config.get_models_for_task(task)
+    elif hardware:
+        return config.get_models_for_hardware(hardware)
+    else:
+        return config.get_all_models()
+
+
+def get_model_info(model_name: str) -> dict:
+    """
+    Get detailed information about a specific model.
+
+    Args:
+        model_name: Name of the model
+
+    Returns:
+        Dictionary with model metadata (description, task, hardware, etc.)
+
+    Example:
+        >>> import degirum_face
+        >>> info = degirum_face.get_model_info("arcface_mobilefacenet--112x112_quant_hailort_hailo8_1")
+        >>> print(f"Model description: {info['description']}")
+        >>> print(f"Task: {info['task']}")
+        >>> print(f"Hardware: {info['hardware']}")
+    """
+    config = get_model_config()
+    return config.get_model_info(model_name)
+
+
+def get_default_model(hardware: str, task: str) -> str:
+    """
+    Get the default model for a specific hardware and task combination.
+
+    Args:
+        hardware: Hardware device name (e.g., "hailo8", "degirum_orca")
+        task: Task name (e.g., "face_detection", "face_recognition")
+
+    Returns:
+        Default model name for the hardware/task combination
+
+    Example:
+        >>> import degirum_face
+        >>> default = degirum_face.get_default_model("hailo8", "face_recognition")
+        >>> print(f"Default face recognition model for hailo8: {default}")
+    """
+    config = get_model_config()
+    return config.get_default_model(hardware, task)
+
+
+def validate_hardware_task_combination(hardware: str, task: str) -> bool:
+    """
+    Check if a hardware device supports a specific task.
+
+    Args:
+        hardware: Hardware device name
+        task: Task name
+
+    Returns:
+        True if the hardware supports the task, False otherwise
+
+    Example:
+        >>> import degirum_face
+        >>> is_supported = degirum_face.validate_hardware_task_combination("hailo8", "face_recognition")
+        >>> print(f"Hailo8 supports face recognition: {is_supported}")
+    """
+    config = get_model_config()
+    return config.validate_hardware_task_combination(hardware, task)
 
 
 class FaceTracking:
+    """
+    Main orchestrator class for comprehensive face tracking and recognition systems.
+
+    FaceTracking provides a high-level interface for building end-to-end face
+    monitoring applications. It integrates face detection, recognition, filtering,
+    and video analytics into a unified streaming pipeline.
+
+    Core Capabilities:
+        - Real-time face detection using DeGirum AI models
+        - Face re-identification (ReID) with persistent database storage
+        - Advanced face filtering (size, orientation, spatial zones)
+        - Automated video clip extraction for detected faces
+        - Multi-device model deployment for scalable performance
+        - Comprehensive video analytics and annotation
+
+    Architecture Overview:
+        The system uses a gizmo-based streaming architecture where each
+        component processes video frames in a pipeline:
+
+        Video Source → Face Detection → Face Filtering → Face Recognition
+                                ↓
+        Video Output ← Annotation ← Database Lookup ← Feature Extraction
+
+    Key Features:
+        - Persistent face database with embedding vectors
+        - Configurable face quality filtering
+        - Zone-based spatial monitoring
+        - Automatic video clip generation
+        - Multi-model load balancing
+        - Real-time performance optimization
+
+    Usage Patterns:
+        1. Video File Processing: Analyze pre-recorded video files
+        2. Live Camera Monitoring: Real-time face tracking from cameras
+        3. Batch Analysis: Process multiple video sources efficiently
+        4. Interactive Applications: Integration with UI/control systems
+
+    Performance Characteristics:
+        - Scalable across multiple GPU devices
+        - Optimized for real-time processing (>30 FPS)
+        - Memory-efficient streaming pipeline
+        - Configurable quality vs. speed trade-offs
+
+    Database Integration:
+        - SQLite-based face embedding storage
+        - Automatic database creation and management
+        - Support for face enrollment and lookup
+        - Persistent face identity tracking
+
+    Example:
+        >>> # Initialize face tracking system
+        >>> tracker = FaceTracking(
+        ...     hw_location="@cloud",
+        ...     model_zoo_url="degirum/public",
+        ...     face_detector_model_name="yolo_v8n_face_det",
+        ...     face_reid_model_name="arcface_resnet50",
+        ...     clip_storage_config=storage_config,
+        ...     db_filename="employee_faces.db"
+        ... )
+        >>>
+        >>> # Process security camera feed
+        >>> composition = tracker.track_faces_from_video(
+        ...     input_video="security_cam.mp4",
+        ...     output_dir="./security_alerts",
+        ...     zone=[{"type": "rectangle", "coords": [100, 100, 500, 400]}]
+        ... )
+        >>> composition.start()
+
+    Thread Safety:
+        The FaceTracking class is designed for single-threaded initialization
+        but supports multi-threaded pipeline execution through the gizmo framework.
+    """
 
     annotated_video_suffix = "_annotated"  # suffix for annotated video clips
 
@@ -51,18 +372,82 @@ class FaceTracking:
         face_reid_model_devices: Optional[list] = None,
     ):
         """
-        Constructor.
+        Initialize the FaceTracking system with AI models and configuration.
+
+        Sets up the core components needed for face detection, recognition,
+        and video processing. Initializes database connections and validates
+        model accessibility.
 
         Args:
-            hw_location (str): Hardware location for the inference.
-            model_zoo_url (str): URL of the model zoo.
-            face_detector_model_name (str): Name of the face detection model in the model zoo.
-            face_reid_model_name (str): Name of the face reID model in the model zoo.
-            clip_storage_config (ObjectStorageConfig): Configuration for the object storage where video clips are stored.
-            db_filename (str): Path to the reID database.
-            token (str, optional): cloud API token or None to use the token from environment.
-            face_detector_model_devices (Optional[list]): List of device indexes for the face detector model. If None, all devices are used.
-            face_reid_model_devices (Optional[list]): List of device indexes for the face reID model. If None, all devices are used.
+            hw_location: Hardware deployment target for AI inference:
+                - "@cloud": DeGirum cloud infrastructure
+                - "@local": Local hardware deployment
+                - Specific device specifications (e.g., "cuda:0")
+
+            model_zoo_url: Base URL for accessing AI model repository:
+                - "degirum/public": Public DeGirum model zoo
+                - Custom model zoo URLs for private deployments
+
+            face_detector_model_name: Name of face detection model in zoo:
+                - "yolo_v8n_face_det": Fast YOLO-based face detector
+                - "retinaface_resnet50": High-accuracy RetinaFace detector
+                - Custom face detection model names
+
+            face_reid_model_name: Name of face recognition model in zoo:
+                - "arcface_resnet50": Standard ArcFace embedding model
+                - "facenet_inception": Alternative face embedding model
+                - Custom face recognition model names
+
+            clip_storage_config: Configuration for video clip storage system:
+                - Local filesystem storage configuration
+                - Cloud storage (S3, Azure, GCP) configuration
+                - Defines where extracted face clips are saved
+
+            db_filename: Path to SQLite database for face storage:
+                - Local file path for face embedding database
+                - Automatically created if doesn't exist
+                - Stores face embeddings and metadata
+
+            token: Authentication token for cloud services (optional):
+                - DeGirum cloud API token for model access
+                - None to use environment variable token
+                - Required for cloud-based deployments
+
+            face_detector_model_devices: Device distribution for face detection:
+                - List of device IDs [0, 1, 2] for multi-GPU deployment
+                - None to use all available devices automatically
+                - Enables load balancing across hardware
+
+            face_reid_model_devices: Device distribution for face recognition:
+                - List of device IDs for recognition model deployment
+                - Independent of detector device configuration
+                - Allows different scaling strategies per model
+
+        Raises:
+            ConnectionError: If model zoo is unreachable
+            FileNotFoundError: If database directory doesn't exist
+            ValueError: If model names are invalid or not found
+            AuthenticationError: If token is invalid for cloud access
+
+        Performance Notes:
+            - Model loading is deferred until first pipeline creation
+            - Database connection is established immediately
+            - Device validation occurs during model loading
+            - Multi-device setup improves throughput linearly
+
+        Example Configuration:
+            >>> # Cloud deployment with multi-GPU
+            >>> tracker = FaceTracking(
+            ...     hw_location="@cloud",
+            ...     model_zoo_url="degirum/public",
+            ...     face_detector_model_name="yolo_v8n_face_det",
+            ...     face_reid_model_name="arcface_resnet50",
+            ...     clip_storage_config=local_storage_config,
+            ...     db_filename="./data/faces.db",
+            ...     token="your_api_token",
+            ...     face_detector_model_devices=[0, 1],
+            ...     face_reid_model_devices=[2, 3]
+            ... )
         """
         self._hw_location = hw_location
         self._model_zoo_url = model_zoo_url
@@ -246,10 +631,14 @@ class FaceTracking:
             # face crop gizmo
             face_extract = FaceExtractGizmo(
                 target_image_size=reid_height,
-                face_reid_map=face_map,
-                reid_expiration_frames=0,
-                zone_ids=[0] if zone else None,
-                min_face_size=reid_height // 2,
+                filter_config=FaceFilterConfig(
+                    zone_ids=[0] if zone else None,
+                    min_face_size=reid_height // 2,
+                    enable_frontal_filter=False,
+                    enable_shift_filter=False,
+                ),
+                recognition_only=False,
+                reid_config={"object_map": face_map, "expiration_frames": 0},
             )
 
             # face ReID AI gizmo
@@ -387,10 +776,17 @@ class FaceTracking:
         # face crop gizmo
         face_extract = FaceExtractGizmo(
             target_image_size=reid_height,
-            face_reid_map=face_map,
-            reid_expiration_frames=reid_expiration_frames,
-            zone_ids=[0] if zone else None,
-            min_face_size=reid_height // 2,
+            filter_config=FaceFilterConfig(
+                zone_ids=[0] if zone else None,
+                min_face_size=reid_height // 2,
+                enable_frontal_filter=False,
+                enable_shift_filter=False,
+            ),
+            recognition_only=False,
+            reid_config={
+                "object_map": face_map,
+                "expiration_frames": reid_expiration_frames,
+            },
         )
 
         # face ReID AI gizmo

@@ -145,7 +145,11 @@ class ReID_Database:
             data = [
                 {
                     ReID_Database.key_object_id: object_id,
-                    ReID_Database.key_embedding: embedding,
+                    ReID_Database.key_embedding: (
+                        embedding.tolist()
+                        if hasattr(embedding, "tolist")
+                        else embedding
+                    ),
                     ReID_Database.key_embedding_hash: hashlib.sha256(
                         embedding.tobytes()
                     ).hexdigest(),
@@ -202,7 +206,7 @@ class ReID_Database:
 
     def get_attributes_by_embedding(
         self, embedding: np.ndarray
-    ) -> Tuple[Optional[str], Optional[Any]]:
+    ) -> Tuple[Optional[str], Optional[Any], float]:
         """
         Get the object ID and its attributes by its embedding.
 
@@ -210,10 +214,10 @@ class ReID_Database:
             embedding (np.ndarray): The embedding vector.
 
         Returns:
-            tuple: The tuple containing object ID and attributes of the object; (None, None) if not found.
+            tuple: The tuple containing object ID, attributes of the object, and similarity score; (None, None, 0.0) if not found.
         """
 
-        no_result = (None, None)
+        no_result = (None, None, 0.0)
 
         with self._lock:
             embeddings_table, _ = self._open_table(ReID_Database.tbl_embeddings)
@@ -222,12 +226,12 @@ class ReID_Database:
 
             # query the embedding table for the closest embedding
             try:
+                # Search without distance filtering to get the actual closest match
                 embedding_result = (
                     embeddings_table.search(
                         embedding, vector_column_name=ReID_Database.key_embedding
                     )
                     .metric("cosine")
-                    .distance_range(0.0, self._threshold)
                     .limit(1)
                     .to_list()
                 )
@@ -238,6 +242,11 @@ class ReID_Database:
                 return no_result
 
             object_id = embedding_result[0][ReID_Database.key_object_id]
+            distance = embedding_result[0]["_distance"]
+            similarity = 1.0 - distance  # Convert cosine distance to similarity
+
+            # Apply threshold check AFTER getting the result
+            # This ensures we always return the closest match with its actual similarity
             attributes = None
 
             attributes_table, _ = self._open_table(ReID_Database.tbl_attributes)
@@ -251,7 +260,82 @@ class ReID_Database:
                 if attribute_result:
                     attributes = attribute_result[0][ReID_Database.key_attributes]
 
-            return object_id, attributes
+            return object_id, attributes, similarity
+
+    def get_top_matches_by_embedding(
+        self, embedding: np.ndarray, top_n: int = 3
+    ) -> List[Tuple[str, Optional[Any], float]]:
+        """
+        Get the top N matching object IDs and their attributes by embedding.
+
+        Args:
+            embedding (np.ndarray): The embedding vector.
+            top_n (int): Number of top matches to return.
+
+        Returns:
+            List of tuples containing (object_id, attributes, similarity_score).
+            Empty list if no matches found.
+        """
+
+        with self._lock:
+            embeddings_table, _ = self._open_table(ReID_Database.tbl_embeddings)
+            if embeddings_table is None:
+                return []
+
+            # Query the embedding table for the top N closest embeddings
+            try:
+                # Search without distance filtering to get actual closest matches
+                embedding_results = (
+                    embeddings_table.search(
+                        embedding, vector_column_name=ReID_Database.key_embedding
+                    )
+                    .metric("cosine")
+                    .limit(top_n * 3)  # Get more results to account for duplicates
+                    .to_list()
+                )
+            except Exception:
+                return []
+
+            if not embedding_results:
+                return []
+
+            # Group results by object_id and keep only the best match per person
+            best_matches = {}
+            for result in embedding_results:
+                object_id = result[ReID_Database.key_object_id]
+                distance = result["_distance"]
+                similarity = 1.0 - distance  # Convert cosine distance to similarity
+
+                # Keep only the best similarity for each person
+                if (
+                    object_id not in best_matches
+                    or similarity > best_matches[object_id]
+                ):
+                    best_matches[object_id] = similarity
+
+            # Sort by similarity (highest first) and take top N
+            sorted_matches = sorted(
+                best_matches.items(), key=lambda x: x[1], reverse=True
+            )[:top_n]
+
+            # Get attributes for each match
+            attributes_table, _ = self._open_table(ReID_Database.tbl_attributes)
+            results = []
+
+            for object_id, similarity in sorted_matches:
+                attributes = None
+                if attributes_table is not None:
+                    attribute_result = (
+                        attributes_table.search()
+                        .where(f"{ReID_Database.key_object_id} == '{object_id}'")
+                        .to_list()
+                    )
+                    if attribute_result:
+                        attributes = attribute_result[0][ReID_Database.key_attributes]
+
+                results.append((object_id, attributes, similarity))
+
+            return results
 
     def _open_table(
         self, table_name, data: Optional[list] = None
