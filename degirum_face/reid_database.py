@@ -289,7 +289,7 @@ class ReID_Database:
 
         Args:
             table_name (str): Name of the table to open or create.
-            data (Optional[list]): Data to create the table with or add to existing table.
+            data (Optional[list]): Data to create the table with. If table already exists, this data is ignored.
 
         Returns:
             tuple: The tuple containing opened table (or None if the table was not created) and a boolean indicating if table was newly created.

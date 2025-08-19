@@ -20,8 +20,10 @@ from degirum_tools.streams import (
     Gizmo,
     StreamData,
     VideoSourceGizmo,
+    AiObjectDetectionCroppingGizmo,
     tag_inference,
     tag_video,
+    tag_crop,
 )
 
 from .reid_database import ReID_Database
@@ -216,20 +218,21 @@ class ObjectAnnotateGizmo(Gizmo):
 class FaceExtractGizmo(Gizmo):
     """Face extracting and aligning gizmo"""
 
-    # meta keys
-    key_original_result = "original_result"  # original AI object detection result
-    key_cropped_result = "cropped_result"  # sub-result for particular crop
-    key_cropped_index = "cropped_index"  # the number of that sub-result
-    key_is_last_crop = "is_last_crop"  # 'last crop in the frame' flag
+    # meta keys (repeated from AiObjectDetectionCroppingGizmo to be compatible with CropCombiningGizmo)
+    key_original_result = AiObjectDetectionCroppingGizmo.key_original_result
+    key_cropped_result = AiObjectDetectionCroppingGizmo.key_cropped_result
+    key_cropped_index = AiObjectDetectionCroppingGizmo.key_cropped_index
+    key_is_last_crop = AiObjectDetectionCroppingGizmo.key_is_last_crop
 
     def __init__(
         self,
+        *,
         target_image_size: int,
         face_reid_map: Optional[ObjectMap] = None,
         reid_expiration_frames: int = 0,
         zone_ids: Optional[List[int]] = None,
         min_face_size: int = 0,
-        *,
+        apply_landmark_heuristic_filtering: bool = True,
         stream_depth: int = 10,
         allow_drop: bool = False,
     ):
@@ -242,6 +245,7 @@ class FaceExtractGizmo(Gizmo):
             reid_expiration_frames (int): Number of frames after which the face reID needs to be repeated.
             zone_ids (List[int]): List of zone IDs to filter the faces. None means no filtering.
             min_face_size (int): Minimum size of the smaller side of the face bbox in pixels to be considered for reID. 0 means no filtering.
+            apply_landmark_heuristic_filtering (bool): Whether to apply heuristic filtering based on face landmarks analysis.
             stream_depth (int): Depth of the stream.
             allow_drop (bool): Whether to allow dropping frames.
         """
@@ -251,10 +255,11 @@ class FaceExtractGizmo(Gizmo):
         self._reid_expiration_frames = reid_expiration_frames
         self._zone_ids = zone_ids
         self._min_face_size = min_face_size
+        self._apply_landmark_heuristic_filtering = apply_landmark_heuristic_filtering
 
     def get_tags(self) -> List[str]:
         """Get list of tags assigned to this gizmo"""
-        return [self.name, tag_face_align]
+        return [self.name, tag_face_align, tag_crop]
 
     def run(self):
         """Run gizmo"""
@@ -269,14 +274,6 @@ class FaceExtractGizmo(Gizmo):
                 raise Exception(
                     f"{self.__class__.__name__}: inference meta not found: you need to have face detection gizmo in upstream"
                 )
-
-            # get current frame ID
-            video_meta = data.meta.find_last(tag_video)
-            if video_meta is None:
-                raise Exception(
-                    f"{self.__class__.__name__}: video meta not found: you need to have {VideoSourceGizmo.__class__.__name__} in upstream"
-                )
-            frame_id = video_meta[VideoSourceGizmo.key_frame_id]
 
             for i, r in enumerate(result.results):
 
@@ -301,21 +298,31 @@ class FaceExtractGizmo(Gizmo):
                         # skip if the face is not in the specified zones
                         continue
 
-                # get the track ID and skip if not available
-                track_id = r.get("track_id")
-                if track_id is None:
-                    # no track ID - skip reID
-                    continue
-
                 # apply filtering based on face landmark location
-                keypoints = [np.array(lm["landmark"]) for lm in landmarks]
-                if not self.face_is_frontal(keypoints) or self.face_is_shifted(
-                    r["bbox"], keypoints
-                ):
-                    continue  # skip if the face is not frontal or is shifted
+                if self._apply_landmark_heuristic_filtering:
+                    keypoints = [np.array(lm["landmark"]) for lm in landmarks]
+                    if not self.face_is_frontal(keypoints) or self.face_is_shifted(
+                        r["bbox"], keypoints
+                    ):
+                        continue  # skip if the face is not frontal or is shifted
 
                 # apply filtering based on the face reID map
                 if self._face_reid_map is not None:
+
+                    # get the track ID and skip if not available
+                    track_id = r.get("track_id")
+                    if track_id is None:
+                        # no track ID - skip reID
+                        continue
+
+                    # get current frame ID
+                    video_meta = data.meta.find_last(tag_video)
+                    if video_meta is None:
+                        raise Exception(
+                            f"{self.__class__.__name__}: video meta not found: you need to have {VideoSourceGizmo.__class__.__name__} in upstream"
+                        )
+                    frame_id = video_meta[VideoSourceGizmo.key_frame_id]
+
                     face_status = self._face_reid_map.get(track_id)
                     if face_status is None:
                         # new face
@@ -465,12 +472,17 @@ class AlertMode(Enum):
 class FaceSearchGizmo(Gizmo):
     """Face reID search gizmo"""
 
+    # meta keys for face search information
+    key_face_db_id = "face_db_id"  # face database ID
+    key_face_attributes = "face_attributes"  # face attributes
+    key_face_embeddings = "face_embeddings"  # face embeddings
+
     def __init__(
         self,
-        face_reid_map: ObjectMap,
+        face_reid_map: Optional[ObjectMap],
         db: ReID_Database,
         *,
-        credence_count: int,
+        credence_count: int = 1,
         stream_depth: int = 10,
         allow_drop: bool = False,
         accumulate_embeddings: bool = False,
@@ -520,66 +532,75 @@ class FaceSearchGizmo(Gizmo):
                     f"{self.__class__.__name__}: inference meta not found: you need to have reID inference gizmo in upstream"
                 )
 
-            # get current frame ID
-            video_meta = data.meta.find_last(tag_video)
-            if video_meta is None:
-                raise Exception(
-                    f"{self.__class__.__name__}: video meta not found: you need to have {VideoSourceGizmo.__class__.__name__} in upstream"
-                )
-
-            # get face crop result
-            crop_meta = data.meta.find_last(tag_face_align)
-            if crop_meta is None:
-                raise Exception(
-                    f"{self.__class__.__name__}: crop meta not found: you need to have {FaceExtractGizmo.__class__.__name__} in upstream"
-                )
-
-            face_obj = crop_meta.get(FaceExtractGizmo.key_cropped_result)
-            assert face_obj
-            track_id = face_obj.get("track_id")
-            assert track_id
-
             # search the database for the face embedding
             embedding = result.results[0].get("data").ravel()
             embedding /= np.linalg.norm(embedding)
             db_id, attributes = self._db.get_attributes_by_embedding(embedding)
 
+            # send the result to the output
+            new_meta = data.meta.clone()
+            new_meta.append(
+                {
+                    self.key_face_db_id: db_id,
+                    self.key_face_attributes: attributes,
+                    self.key_face_embeddings: embedding,
+                },
+                self.get_tags(),
+            )
+            self.send_result(StreamData(data.data, new_meta))
+
             # update the face attributes in the map
-            face = self._face_reid_map.get(track_id)
-            if face is not None:
-                # existing face - update the attributes
-                if face.db_id == db_id:
-                    face.confirmed_count += 1
-                else:
-                    face.confirmed_count = 1
-                    # reset frame counter when the face changes status for quick reconfirming
-                    face.next_reid_frame = face.last_reid_frame + 1
+            if self._face_reid_map is not None:
 
-                face.is_confirmed = face.confirmed_count >= self._credence_count
-                if face.attributes != attributes and not self._alert_once:
-                    face.is_alerted = False  # reset alert if attributes changed
-                face.attributes = attributes
-                face.db_id = db_id
-                if self._accumulate_embeddings:
-                    face.embeddings.append(embedding)
+                # get face crop result
+                crop_meta = data.meta.find_last(tag_face_align)
+                if crop_meta is None:
+                    raise Exception(
+                        f"{self.__class__.__name__}: crop meta not found: you need to have {FaceExtractGizmo.__class__.__name__} in upstream"
+                    )
 
-                if face.is_confirmed:
-                    if (
-                        (
-                            self._alert_mode == AlertMode.ON_UNKNOWNS
-                            and attributes is None
-                            and not face.is_alerted
-                        )
-                        or (
-                            self._alert_mode == AlertMode.ON_KNOWNS
-                            and attributes is not None
-                            and not face.is_alerted
-                        )
-                        or (
-                            self._alert_mode == AlertMode.ON_ALL and not face.is_alerted
-                        )
-                    ):
-                        self._face_reid_map.set_alert(True)
-                        face.is_alerted = True
+                face_obj = crop_meta.get(FaceExtractGizmo.key_cropped_result)
+                assert face_obj
 
-                self._face_reid_map.put(track_id, face)
+                track_id = face_obj.get("track_id")
+                assert track_id
+
+                face = self._face_reid_map.get(track_id)
+                if face is not None:
+                    # existing face - update the attributes
+                    if face.db_id == db_id:
+                        face.confirmed_count += 1
+                    else:
+                        face.confirmed_count = 1
+                        # reset frame counter when the face changes status for quick reconfirming
+                        face.next_reid_frame = face.last_reid_frame + 1
+
+                    face.is_confirmed = face.confirmed_count >= self._credence_count
+                    if face.attributes != attributes and not self._alert_once:
+                        face.is_alerted = False  # reset alert if attributes changed
+                    face.attributes = attributes
+                    face.db_id = db_id
+                    if self._accumulate_embeddings:
+                        face.embeddings.append(embedding)
+
+                    if face.is_confirmed:
+                        if (
+                            (
+                                self._alert_mode == AlertMode.ON_UNKNOWNS
+                                and attributes is None
+                                and not face.is_alerted
+                            )
+                            or (
+                                self._alert_mode == AlertMode.ON_KNOWNS
+                                and attributes is not None
+                                and not face.is_alerted
+                            )
+                            or (
+                                self._alert_mode == AlertMode.ON_ALL
+                                and not face.is_alerted
+                            )
+                        ):
+                            self._face_reid_map.set_alert(True)
+                            face.is_alerted = True
+
+                    self._face_reid_map.put(track_id, face)
