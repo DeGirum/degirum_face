@@ -78,7 +78,20 @@ import os
 import tempfile
 import degirum as dg
 import degirum_tools
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
+
+
+def __dir__():
+    return [
+        "FaceTracking",
+        "AlertMode",
+        "ObjectMap",
+        "ReID_Database",
+        "FaceSearchGizmo",
+        "FaceExtractGizmo",
+        "ObjectAnnotateGizmo",
+    ]
+
 
 from degirum_tools.streams import (
     Composition,
@@ -456,19 +469,9 @@ class FaceTracking:
         self._face_reid_model_name = face_reid_model_name
         self._face_reid_model_devices = face_reid_model_devices
         self._clip_storage_config = clip_storage_config
-        self._db_filename = db_filename
         self._token = token
-        self.db: Optional[ReID_Database] = None
-        self._open_db()
 
-    def _open_db(self):
-        """
-        Open the database for face reID.
-        If the database does not exist, create it.
-        """
-        if self.db is None:
-            self.db = ReID_Database(self._db_filename)
-        return self.db
+        self.db = ReID_Database(db_filename)
 
     def _load_models(
         self, zone: Optional[list], reid_expiration_frames: int
@@ -520,11 +523,14 @@ class FaceTracking:
 
         return face_detect_model, face_reid_model
 
-    def list_clips(self):
+    def list_clips(self) -> Dict[str, dict]:
         """
         List the video clips in the storage.
-        Returns a dictionary where the key is the clip filename and value is the list of
-            video clip file objects (of minio.Object type) associated with that clip (original video clip, JSON annotations, annotated video clip)
+        Returns a dictionary where the key is the clip filename and value is the dict of
+            video clip file objects (of minio.Object type) associated with that clip
+            original video clip: "original" key,
+            JSON annotations: "json" key,
+            annotated video clip: "annotated" key
         """
 
         ret: dict = {}
@@ -646,7 +652,7 @@ class FaceTracking:
 
             # face reID search gizmo
             face_search = FaceSearchGizmo(
-                face_map, self._open_db(), credence_count=1, accumulate_embeddings=True
+                face_map, self.db, credence_count=1, accumulate_embeddings=True
             )
 
             # object annotator gizmo
@@ -666,9 +672,10 @@ class FaceTracking:
             ).start()
 
             # upload the annotated video to the object storage
-            storage.upload_file_to_object_storage(
-                output_video_local_path, out_object_name
-            )
+            if save_annotated:
+                storage.upload_file_to_object_storage(
+                    output_video_local_path, out_object_name
+                )
 
             # compute K-means clustering on the embeddings
             for id, face in face_map.map.items():
@@ -795,7 +802,7 @@ class FaceTracking:
         # face reID search gizmo
         face_search = FaceSearchGizmo(
             face_map,
-            self._open_db(),
+            self.db,
             credence_count=credence_count,
             alert_mode=alert_mode,
             alert_once=alert_once,

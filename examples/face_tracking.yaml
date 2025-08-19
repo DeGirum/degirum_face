@@ -8,19 +8,43 @@
 # It includes model names, device configurations, video source, and notification settings.
 #
 
+# inference hardware location, can be "@cloud", "@local" or AI server hostname
 hw_location: "@cloud"
+
+# model zoo path, can be cloud path like "degirum/public" or local path for @local inference
 model_zoo_url: degirum/public
+
+# model name for face keypoints detection; should detect 5 keypoints: two eyes, nose, mouth (2 points)
 face_detector_model_name: yolov8n_relu6_widerface_kpts--640x640_quant_n2x_orca1_1
+
+# list of device indexes for face keypoints detection model; delete this line to use all available
 face_detector_model_devices: [0]
+
+# model name for face reID; should detect face embeddings
 face_reid_model_name: mbf_w600k--112x112_float_n2x_orca1_1
-face_reid_model_devices: [1]
-video_source: 0 # local camera
+
+# list of device indexes for face reID model; delete this line to use all available
+face_reid_model_devices: [0]
+
+# video source; can be integer number to use local camera, RTSP URL, or path to video file
+video_source: 0 
+
+# path to the ReID database directory
 db_filename: "temp/face_reid_db.lance"
-clip_duration: 100  # frames
-reid_expiration_frames: 10  # number of frames to repeat face reID
-credence_count: 4 # number of frames to consider face reID as valid
+
+# number of frames to save in the video clip
+clip_duration: 100
+
+# number of frames to repeat face reID
+reid_expiration_frames: 10
+
+# number of frames to consider face reID as valid
+credence_count: 4
+
 # Apprise notification config string and message template
 notification_message: '{time}: **Unknown** person detected.'
+
+# S3-compatible or local storage configuration for video clips
 endpoint: ./temp  # endpoint url, or path to local folder for local storage
 access_key: ""  # access key for S3-compatible storage
 secret_key: ""  # secret key for S3-compatible storage
