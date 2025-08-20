@@ -476,6 +476,7 @@ class FaceSearchGizmo(Gizmo):
     key_face_db_id = "face_db_id"  # face database ID
     key_face_attributes = "face_attributes"  # face attributes
     key_face_embeddings = "face_embeddings"  # face embeddings
+    key_face_similarity_score = "face_similarity_score"  # similarity score of the face embedding
 
     def __init__(
         self,
@@ -535,7 +536,7 @@ class FaceSearchGizmo(Gizmo):
             # search the database for the face embedding
             embedding = result.results[0].get("data").ravel()
             embedding /= np.linalg.norm(embedding)
-            db_id, attributes = self._db.get_attributes_by_embedding(embedding)
+            db_id, attributes, score = self._db.get_attributes_by_embedding(embedding)
 
             # send the result to the output
             new_meta = data.meta.clone()
@@ -544,6 +545,7 @@ class FaceSearchGizmo(Gizmo):
                     self.key_face_db_id: db_id,
                     self.key_face_attributes: attributes,
                     self.key_face_embeddings: embedding,
+                    self.key_face_similarity_score: score,
                 },
                 self.get_tags(),
             )

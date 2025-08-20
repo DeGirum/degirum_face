@@ -112,8 +112,8 @@ class ReID_Database:
 
             object_ids = (
                 embeddings_table.search()
-                .select(["object_id"])
-                .to_arrow()["object_id"]
+                .select([self.key_object_id])
+                .to_arrow()[self.key_object_id]
                 .to_pylist()
             )
 
@@ -229,7 +229,7 @@ class ReID_Database:
 
     def get_attributes_by_embedding(
         self, embedding: np.ndarray
-    ) -> Tuple[Optional[str], Optional[Any]]:
+    ) -> Tuple[Optional[str], Optional[Any], float]:
         """
         Get the object ID and its attributes by its embedding.
 
@@ -237,10 +237,10 @@ class ReID_Database:
             embedding (np.ndarray): The embedding vector.
 
         Returns:
-            tuple: The tuple containing object ID and attributes of the object; (None, None) if not found.
+            tuple: The tuple containing object ID, object attributes, and similarity score; (None, None, 0.0) if not found.
         """
 
-        no_result = (None, None)
+        no_result = (None, None, 0.0)
 
         with self._lock:
             embeddings_table, _ = self._open_table(ReID_Database.tbl_embeddings)
@@ -254,7 +254,7 @@ class ReID_Database:
                         embedding, vector_column_name=ReID_Database.key_embedding
                     )
                     .metric("cosine")
-                    .distance_range(0.0, self._threshold)
+                    .distance_range(-1e-3, self._threshold)
                     .limit(1)
                     .to_list()
                 )
@@ -266,6 +266,7 @@ class ReID_Database:
 
             object_id = embedding_result[0][ReID_Database.key_object_id]
             attributes = None
+            score = 1.0 - embedding_result[0]["_distance"]
 
             attributes_table, _ = self._open_table(ReID_Database.tbl_attributes)
             if attributes_table is not None:
@@ -278,7 +279,7 @@ class ReID_Database:
                 if attribute_result:
                     attributes = attribute_result[0][ReID_Database.key_attributes]
 
-            return object_id, attributes
+            return object_id, attributes, score
 
     def _open_table(
         self, table_name, data: Optional[list] = None

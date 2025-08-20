@@ -9,7 +9,7 @@ import os
 import tempfile
 import degirum as dg
 import degirum_tools
-from typing import Dict, Optional, Tuple, Union
+from typing import Any, Dict, Generator, Optional, Tuple, Union
 
 
 def __dir__():
@@ -30,10 +30,13 @@ from degirum_tools.streams import (
     AiAnalyzerGizmo,
     AiSimpleGizmo,
     FPSStabilizingGizmo,
+    GeneratorSourceGizmo,
+    SinkGizmo,
     VideoDisplayGizmo,
     VideoSaverGizmo,
     VideoSourceGizmo,
     VideoStreamerGizmo,
+    tag_video,
 )
 
 from .face_tracking_gizmos import (
@@ -42,6 +45,8 @@ from .face_tracking_gizmos import (
     FaceExtractGizmo,
     ObjectAnnotateGizmo,
     AlertMode,
+    tag_face_search,
+    tag_face_align,
 )
 from .reid_database import ReID_Database
 
@@ -57,11 +62,11 @@ class FaceTracking:
         model_zoo_url: str,
         face_detector_model_name: str,
         face_reid_model_name: str,
-        clip_storage_config: degirum_tools.ObjectStorageConfig,
-        db_filename: str,
         token: Optional[str] = None,
         face_detector_model_devices: Optional[list] = None,
         face_reid_model_devices: Optional[list] = None,
+        db_filename: str,
+        clip_storage_config: Optional[degirum_tools.ObjectStorageConfig] = None,
     ):
         """
         Constructor.
@@ -89,7 +94,7 @@ class FaceTracking:
         self.db = ReID_Database(db_filename)
 
     def _load_models(
-        self, zone: Optional[list], reid_expiration_frames: int
+        self, zone: Optional[list], reid_expiration_frames: Optional[int]
     ) -> Tuple[dg.model.Model, dg.model.Model]:
         """
         Load the face detection and face reID models from the model zoo.
@@ -111,17 +116,18 @@ class FaceTracking:
 
         analyzers = []
         # face tracker
-        analyzers.append(
-            degirum_tools.ObjectTracker(
-                track_thresh=0.35,
-                track_buffer=reid_expiration_frames + 1,
-                match_thresh=0.9999,
-                trail_depth=reid_expiration_frames + 1,
-                anchor_point=degirum_tools.AnchorPoint.CENTER,
-                show_overlay=True,
-                show_only_track_ids=True,
+        if reid_expiration_frames is not None:
+            analyzers.append(
+                degirum_tools.ObjectTracker(
+                    track_thresh=0.35,
+                    track_buffer=reid_expiration_frames + 1,
+                    match_thresh=0.9999,
+                    trail_depth=reid_expiration_frames + 1,
+                    anchor_point=degirum_tools.AnchorPoint.CENTER,
+                    show_overlay=True,
+                    show_only_track_ids=True,
+                )
             )
-        )
 
         # in-zone counter for all faces
         if zone:
@@ -440,3 +446,80 @@ class FaceTracking:
         composition.start(wait=False)
 
         return composition, watchdog
+
+    def recognize_batch(
+        self, frames: Generator[Any, None, None]
+    ) -> Generator[dg.postprocessor.InferenceResults, None, None]:
+        """
+        Recognize faces in a batch of frames.
+
+        Args:
+            frames: A generator yielding frames as numpy arrays or file paths
+
+        Returns:
+            A generator yielding inference results provided by face detection model augmented with face recognition results:
+                ""
+        """
+
+        # load models
+        face_detect_model, face_reid_model = self._load_models(None, None)
+
+        reid_height = face_reid_model.input_shape[0][1]  # reID model input height
+
+        # frame source gizmo
+        source = GeneratorSourceGizmo(frames)
+
+        # face detector AI gizmo
+        face_detect = AiSimpleGizmo(face_detect_model)
+
+        # face crop gizmo
+        face_extract = FaceExtractGizmo(
+            target_image_size=reid_height,
+            face_reid_map=None,
+            reid_expiration_frames=1,
+            zone_ids=None,
+            min_face_size=reid_height // 2,
+        )
+
+        # face ReID AI gizmo
+        face_reid = AiSimpleGizmo(face_reid_model)
+
+        # face reID search gizmo
+        face_search = FaceSearchGizmo(None, self.db)
+
+        # sink gizmo to collect results
+        sink = SinkGizmo()
+
+        with Composition(
+            source >> face_detect >> face_extract >> face_reid >> face_search >> sink
+        ):
+            ret: Optional[dg.postprocessor.InferenceResults] = None
+            for r in sink():
+                search_meta = r.meta.find_last(tag_face_search)
+                crop_meta = r.meta.find_last(tag_face_align)
+                video_meta = r.meta.find_last(tag_video)
+
+                if not ret:
+                    ret = crop_meta[FaceExtractGizmo.key_original_result]
+                    ret._frame_info = video_meta[GeneratorSourceGizmo.key_file_path]
+
+                idx = crop_meta[FaceExtractGizmo.key_cropped_index]
+                ret._inference_results[idx]["face_embeddings"] = search_meta[
+                    FaceSearchGizmo.key_face_embeddings
+                ]
+                ret._inference_results[idx]["face_db_id"] = search_meta[
+                    FaceSearchGizmo.key_face_db_id
+                ]
+                ret._inference_results[idx]["face_attributes"] = search_meta[
+                    FaceSearchGizmo.key_face_attributes
+                ]
+                ret._inference_results[idx]["face_similarity_score"] = search_meta[
+                    FaceSearchGizmo.key_face_similarity_score
+                ]
+
+                if crop_meta[FaceExtractGizmo.key_is_last_crop]:
+                    yield ret
+                    ret = None
+
+            if ret is not None:
+                yield ret
