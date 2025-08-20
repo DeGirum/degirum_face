@@ -26,7 +26,7 @@ import uuid
 import yaml
 import degirum_face
 from pathlib import Path
-from degirum_tools import ObjectStorageConfig, ObjectStorage
+from degirum_tools import ObjectStorageConfig
 
 
 #
