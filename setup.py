@@ -21,7 +21,7 @@ setup(
     python_requires=">=3.9",
     packages=find_packages(),
     install_requires=[
-        "degirum_tools[notifications] >= 0.19.0",
+        "degirum_tools[notifications] >= 0.19.1",
         "lancedb >= 0.24.0",
     ],
     extras_require={
