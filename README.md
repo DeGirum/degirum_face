@@ -34,7 +34,7 @@ You can run the full pipeline in one call, or step by step for maximum control.
 **Auto Mode (recommended):**
 ```python
 from degirum_face import FaceRecognition
-face_rec = FaceRecognition.auto("hailo8", inference_host_address="@localhost")
+face_rec = FaceRecognition.auto("hailo8", inference_host_address="@local")
 ```
 
 **From Config:**
