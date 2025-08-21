@@ -3,6 +3,8 @@ DeGirum Face Tracking Application Package
 
 A comprehensive face tracking and recognition system built on the DeGirum AI platform.
 Provides real-time face detection, recognition, and monitoring capabilities with
+from .face_recognition import FaceRecognition
+
 advanced filtering, database management, and video analytics.
 
 Key Features:
@@ -118,9 +120,6 @@ from .face_detector import FaceDetector, detect_faces
 from .face_embedder import FaceEmbedder, embed_face, verify_faces
 from .face_recognition import (
     FaceRecognition,
-    EnrollmentResult,
-    RecognitionResult,
-    FaceQualityMetrics,
 )
 from .pipeline_config import PipelineModelConfig, ModelSpec
 from .model_config import get_model_config
@@ -148,7 +147,7 @@ def get_supported_tasks() -> list:
     Get list of all supported AI tasks.
 
     Returns:
-        List of task names (e.g., ["face_detection", "face_recognition"])
+        List of task names (e.g., ["face_detection", "face_embedding"])
 
     Example:
         >>> import degirum_face
@@ -164,14 +163,14 @@ def get_hardware_for_task(task: str) -> list:
     Get list of hardware devices that support a specific task.
 
     Args:
-        task: Task name (e.g., "face_detection", "face_recognition")
+        task: Task name (e.g., "face_detection", "face_embedding")
 
     Returns:
         List of hardware device names that support the task
 
     Example:
         >>> import degirum_face
-        >>> hardware = degirum_face.get_hardware_for_task("face_recognition")
+        >>> hardware = degirum_face.get_hardware_for_task("face_embedding")
         >>> print(f"Hardware supporting face recognition: {hardware}")
     """
     config = get_model_config()
@@ -202,7 +201,7 @@ def get_available_models(task: str = None, hardware: str = None) -> list:
     Get list of available models, optionally filtered by task and/or hardware.
 
     Args:
-        task: Optional task filter (e.g., "face_detection", "face_recognition")
+        task: Optional task filter (e.g., "face_detection", "face_embedding")
         hardware: Optional hardware filter (e.g., "hailo8", "degirum_orca")
 
     Returns:
@@ -220,7 +219,7 @@ def get_available_models(task: str = None, hardware: str = None) -> list:
         >>> hailo8_models = degirum_face.get_available_models(hardware="hailo8")
         >>>
         >>> # Face recognition models for Hailo8
-        >>> models = degirum_face.get_available_models(task="face_recognition", hardware="hailo8")
+        >>> models = degirum_face.get_available_models(task="face_embedding", hardware="hailo8")
     """
     config = get_model_config()
 
@@ -261,14 +260,14 @@ def get_default_model(hardware: str, task: str) -> str:
 
     Args:
         hardware: Hardware device name (e.g., "hailo8", "degirum_orca")
-        task: Task name (e.g., "face_detection", "face_recognition")
+        task: Task name (e.g., "face_detection", "face_embedding")
 
     Returns:
         Default model name for the hardware/task combination
 
     Example:
         >>> import degirum_face
-        >>> default = degirum_face.get_default_model("hailo8", "face_recognition")
+        >>> default = degirum_face.get_default_model("hailo8", "face_embedding")
         >>> print(f"Default face recognition model for hailo8: {default}")
     """
     config = get_model_config()
@@ -288,7 +287,7 @@ def validate_hardware_task_combination(hardware: str, task: str) -> bool:
 
     Example:
         >>> import degirum_face
-        >>> is_supported = degirum_face.validate_hardware_task_combination("hailo8", "face_recognition")
+        >>> is_supported = degirum_face.validate_hardware_task_combination("hailo8", "face_embedding")
         >>> print(f"Hailo8 supports face recognition: {is_supported}")
     """
     config = get_model_config()

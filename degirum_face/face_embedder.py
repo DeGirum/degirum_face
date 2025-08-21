@@ -54,7 +54,7 @@ class FaceEmbedder:
     """
 
     # Class constant - this is a face recognition/embedding class
-    TASK = "face_recognition"
+    TASK = "face_embedding"
 
     @classmethod
     def _load_auto_mode_model(

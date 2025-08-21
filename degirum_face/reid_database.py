@@ -16,23 +16,31 @@ from typing import Any, Tuple, Dict, List, Optional
 
 
 class ReID_Database:
-
-    def get_all_embeddings(self) -> dict:
+    def get_embeddings_by_id(self, object_id: str) -> List[np.ndarray]:
         """
-        Return all embeddings in the database as a dict: {object_id: [embedding, ...], ...}
+        Get all embeddings for a given object ID.
+
+        Args:
+            object_id (str): The object ID.
+
+        Returns:
+            List[np.ndarray]: List of embeddings for the object, or empty list if none found.
         """
         with self._lock:
+            embeddings = []
             embeddings_table, _ = self._open_table(ReID_Database.tbl_embeddings)
             if embeddings_table is None:
-                return {}
-            all_rows = embeddings_table.search().to_list()
-            result = {}
-            for row in all_rows:
-                obj_id = row.get(ReID_Database.key_object_id)
+                return embeddings
+            results = (
+                embeddings_table.search()
+                .where(f"{ReID_Database.key_object_id} == '{object_id}'")
+                .to_list()
+            )
+            for row in results:
                 emb = row.get(ReID_Database.key_embedding)
-                if obj_id is not None and emb is not None:
-                    result.setdefault(obj_id, []).append(np.array(emb))
-            return result
+                if emb is not None:
+                    embeddings.append(np.array(emb))
+            return embeddings
 
     """
     Class to hold the database of object embeddings.
@@ -184,7 +192,6 @@ class ReID_Database:
 
                     # Remove rows from the table where the embedding hash is in duplicate_hashes
                     if duplicate_hashes:
-                        print("found a duplicate embedding, removing it")
                         hashes_str = "', '".join(duplicate_hashes)
                         table.delete(
                             where=f"{ReID_Database.key_embedding_hash} IN ('{hashes_str}')"
@@ -248,18 +255,18 @@ class ReID_Database:
 
     def get_attributes_by_embedding(
         self, embedding: np.ndarray
-    ) -> Tuple[Optional[str], Optional[Any], Optional[float], Optional[np.ndarray]]:
+    ) -> Tuple[Optional[str], Optional[Any], Optional[float]]:
         """
-        Get the object ID, its attributes, distance, and matched embedding by its embedding.
+        Get the object ID, its attributes, and score by its embedding.
 
         Args:
             embedding (np.ndarray): The embedding vector.
 
         Returns:
-            tuple: (object_id, attributes, distance, embedding); (None, None, None, None) if not found.
+            tuple: (object_id, attributes, score); (None, None, None) if not found.
         """
 
-        no_result = (None, None, None, None)
+        no_result = (None, None, None)
 
         with self._lock:
             embeddings_table, _ = self._open_table(ReID_Database.tbl_embeddings)
@@ -273,7 +280,7 @@ class ReID_Database:
                         embedding, vector_column_name=ReID_Database.key_embedding
                     )
                     .metric("cosine")
-                    # .distance_range(0.0, self._threshold)
+                    .distance_range(-0.001, self._threshold)
                     .limit(1)
                     .to_list()
                 )
@@ -284,21 +291,8 @@ class ReID_Database:
                 return no_result
 
             object_id = embedding_result[0][ReID_Database.key_object_id]
-            distance = embedding_result[0].get("distance", None)
-            matched_embedding = embedding_result[0].get(
-                ReID_Database.key_embedding, None
-            )
-            # Debug info: print hashes and distance
-            import hashlib
-
-            def emb_hash(emb):
-                if emb is not None:
-                    arr = np.array(emb) if isinstance(emb, list) else emb
-                    return hashlib.sha256(arr.tobytes()).hexdigest()
-                else:
-                    return None
-
             attributes = None
+            score = 1.0 - embedding_result[0]["_distance"]
 
             attributes_table, _ = self._open_table(ReID_Database.tbl_attributes)
             if attributes_table is not None:
@@ -311,7 +305,7 @@ class ReID_Database:
                 if attribute_result:
                     attributes = attribute_result[0][ReID_Database.key_attributes]
 
-            return object_id, attributes, distance, matched_embedding
+            return object_id, attributes, score
 
     def _open_table(
         self, table_name, data: Optional[list] = None

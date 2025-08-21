@@ -45,7 +45,7 @@ class TestFaceEmbedder:
         assert embedder.hardware == "hailo8"
         assert embedder.model == mock_model
         assert embedder.model_name == "arcface_mobilefacenet"
-        assert embedder.TASK == "face_recognition"
+        assert embedder.TASK == "face_embedding"
 
     @patch("degirum_face.face_embedder.dg.connect")
     def test_face_embedder_custom(self, mock_connect):
@@ -163,7 +163,7 @@ class TestFaceEmbedder:
 
         assert info["model_name"] == "test_model"
         assert info["hardware"] == "hailo8"
-        assert info["task"] == "face_recognition"
+        assert info["task"] == "face_embedding"
         assert info["creation_mode"] == "auto"
 
     @patch("degirum_face.face_embedder.FaceEmbedder.auto")

@@ -17,7 +17,7 @@ models:
     
   arcface_mobilefacenet--112x112_quant_hailort_hailo8_1:
     description: "ArcFace MobileFaceNet for face recognition on Hailo-8"
-    task: "face_recognition"
+    task: "face_embedding"
     hardware: "hailo8"
     zoo_url: "degirum/hailo"
     performance: "fast"
@@ -40,7 +40,7 @@ models:
     
   arcface_mobilefacenet--112x112_quant_hailort_hailo8l_1:
     description: "ArcFace MobileFaceNet for face recognition on Hailo-8L"
-    task: "face_recognition"
+    task: "face_embedding"
     hardware: "hailo8l"
     zoo_url: "degirum/hailo"
     performance: "fast"
@@ -75,7 +75,7 @@ models:
     
   arcface_mobilefacenet--112x112_quant_axelera_metis_1:
     description: "ArcFace MobileFaceNet for face recognition on Axelera Metis"
-    task: "face_recognition"
+    task: "face_embedding"
     hardware: "axelera_metis"
     zoo_url: "degirum/axelera"
     performance: "fast"
@@ -110,7 +110,7 @@ models:
     
   arcface_mobilefacenet--112x112_quant_n2x_orca1_1:
     description: "ArcFace MobileFaceNet for face recognition on DeGirum Orca"
-    task: "face_recognition"
+    task: "face_embedding"
     hardware: "degirum_orca"
     zoo_url: "degirum/degirum"
     performance: "fast"

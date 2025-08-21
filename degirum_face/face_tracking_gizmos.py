@@ -4,13 +4,16 @@
 # Copyright DeGirum Corporation 2025
 # All rights reserved
 #
-# Implements gizmo classes for face extraction, alignment, and re-identification (reID).
+# Implements supplemental classes and gizmos for face extraction, alignment, and re-identification (reID).
 #
 
 import cv2
 import numpy as np
+import threading
 import copy
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, ClassVar
+from dataclasses import dataclass, asdict, field
+from enum import Enum
 
 import degirum_tools
 from degirum_tools.streams import (
@@ -24,19 +27,110 @@ from degirum_tools.streams import (
 )
 
 from .reid_database import ReID_Database
-from .face_data import FaceStatus, AlertMode
-from .face_tracking_utils import (
-    ObjectMap,
-    TrackFilter,
-    process_basic_recognition,
-    process_tracked_recognition,
-)
-from .face_filters import FaceFilter, FaceFilterConfig
-from .face_utils import (
-    face_align_and_crop,
-    landmarks_from_dict,
-    search_face_in_database,
-)
+
+
+@dataclass
+class FaceStatus:
+    """
+    Class to hold detected face runtime status.
+    """
+
+    attributes: Optional[Any]  # face attributes
+    db_id: Optional[str] = None  # database ID
+    track_id: int = 0  # face track ID
+    last_reid_frame: int = -1  # last frame number on which reID was performed
+    next_reid_frame: int = -1  # next frame number on which reID should be performed
+    confirmed_count: int = 0  # number of times the face was confirmed
+    is_confirmed: bool = False  # whether the face status is confirmed
+    is_alerted: bool = False  # whether the alert was triggered for this face
+    embeddings: list = field(default_factory=list)  # list of embeddings for the face
+
+    # default labels
+    lbl_not_tracked: ClassVar[str] = "not tracked"
+    lbl_identifying: ClassVar[str] = "identifying"
+    lbl_confirming: ClassVar[str] = "confirming"
+    lbl_unknown: ClassVar[str] = "UNKNOWN"
+
+    def __str__(self):
+        return (
+            str(self.attributes)
+            if self.attributes is not None
+            else FaceStatus.lbl_unknown
+        )
+
+    def to_dict(self):
+        return asdict(self)
+
+
+class ObjectMap:
+    """Thread-safe map of object IDs to object attributes."""
+
+    def __init__(self):
+        """
+        Constructor.
+        """
+
+        self._lock = threading.Lock()
+        self.map: Dict[int, Any] = {}
+        self.alert = False  # flag to indicate if an alert was triggered
+
+    def set_alert(self, alert: bool = True) -> None:
+        """
+        Set the alert flag.
+
+        Args:
+            alert (bool): True to set the alert, False to reset it.
+        """
+        with self._lock:
+            self.alert = alert
+
+    def read_alert(self) -> bool:
+        """
+        Read the alert flag and reset it.
+
+        Returns:
+            bool: True if an alert was triggered, False otherwise.
+        """
+        with self._lock:
+            alert = self.alert
+            self.alert = False
+            return alert
+
+    def put(self, id: int, value: Any) -> None:
+        """
+        Add/update an object in the map
+
+        Args:
+            id (int): Object ID
+            value (Any): Object attributes reference
+        """
+        with self._lock:
+            self.map[id] = value
+
+    def get(self, id: int) -> Optional[Any]:
+        """
+        Get the object by ID
+
+        Args:
+            id (int): The ID of the tracked face.
+
+        Returns:
+            Optional[Any]: The deep copy of object attributes or None if not found.
+        """
+        with self._lock:
+            return copy.deepcopy(self.map.get(id))
+
+    def delete(self, expr):
+        """
+        Delete objects from the map
+
+        Args:
+            expr (lambda): logical expression to filter objects to delete
+        """
+        with self._lock:
+            keys_to_delete = [key for key, value in self.map.items() if expr(value)]
+            for key in keys_to_delete:
+                del self.map[key]
 
 
 tag_obj_annotate = "object_annotate"  # tag for object annotation meta
@@ -53,7 +147,7 @@ class ObjectAnnotateGizmo(Gizmo):
 
     def __init__(
         self,
-        object_map: ObjectMap[FaceStatus],
+        object_map: ObjectMap,
         *,
         label_map: dict = {},
         stream_depth: int = 10,
@@ -63,9 +157,7 @@ class ObjectAnnotateGizmo(Gizmo):
         Constructor.
 
         Args:
-            object_map (ObjectMap[FaceStatus]): Shared storage containing face identification results.
-                This is the same ObjectMap used by other gizmos in the pipeline.
-                The gizmo reads identification results to display appropriate labels.
+            object_map (ObjectMap): The map of object IDs to attributes.
             label_map (dict): Map of special labels (FaceStatus.lbl_*) to their display names.
             stream_depth (int): Depth of the stream.
             allow_drop (bool): Whether to allow dropping frames.
@@ -145,7 +237,7 @@ class FaceExtractGizmo(Gizmo):
         allow_drop: bool = False,
     ):
         """
-        Initialize face extraction and alignment gizmo with grouped configuration.
+        Constructor.
 
         Args:
             target_image_size (int): Size to which the image should be resized.
@@ -158,11 +250,6 @@ class FaceExtractGizmo(Gizmo):
             allow_drop (bool): Whether to allow dropping frames.
         """
         super().__init__([(stream_depth, allow_drop)])
-
-        # Validate target image size
-        if target_image_size <= 0:
-            raise ValueError("target_image_size must be positive")
-
         self._image_size = target_image_size
         self._face_reid_map = face_reid_map
         self._reid_expiration_frames = reid_expiration_frames
@@ -175,14 +262,18 @@ class FaceExtractGizmo(Gizmo):
         return [self.name, tag_face_align, tag_crop]
 
     def run(self):
-        """Run gizmo - clean and simple flow."""
+        """Run gizmo"""
+
         for data in self.get_input(0):
             if self._abort:
                 break
 
-            try:
-                # Get input data
-                result, frame_id = self._get_input_data(data)
+            # get inference result
+            result = data.meta.find_last(tag_inference)
+            if result is None:
+                raise Exception(
+                    f"{self.__class__.__name__}: inference meta not found: you need to have face detection gizmo in upstream"
+                )
 
             for i, r in enumerate(result.results):
 
@@ -204,6 +295,7 @@ class FaceExtractGizmo(Gizmo):
                     if in_zone is None or all(
                         not in_zone[zid] for zid in self._zone_ids if zid < len(in_zone)
                     ):
+                        # skip if the face is not in the specified zones
                         continue
 
                 # apply filtering based on face landmark location
@@ -291,65 +383,90 @@ class FaceExtractGizmo(Gizmo):
         Returns:
             bool: True if the face is frontal, False otherwise.
         """
-        Determine if a track should be processed based on ReID filtering logic.
+
+        assert len(landmarks) == 5
+        quad = np.array(
+            [
+                landmarks[0],  # left eye
+                landmarks[1],  # right eye
+                landmarks[4],  # right mouth
+                landmarks[3],  # left mouth
+            ],
+            dtype=np.float32,
+        )
+        nose = landmarks[2]
+        return cv2.pointPolygonTest(quad, tuple(nose), measureDist=False) > 0
+
+    @staticmethod
+    def face_is_shifted(bbox: list, landmarks: list) -> bool:
+        """
+        Check if the face is shifted based on the landmarks.
 
         Args:
-            track_id: The face track ID (guaranteed to be valid when this method is called)
-            frame_id: Current frame number
+            bbox (list): Bounding box of the face as [x1, y1, x2, y2].
+            landmarks (List[np.ndarray]): List of keypoints (landmarks) as (x, y) coordinates
 
         Returns:
             bool: True if the face is shifted to a side of bbox, False otherwise.
         """
-        # If no ReID coordination, process all tracks (maximum performance)
-        if self._track_filter is None:
-            return True
 
-        # Atomically check and register to avoid race conditions
-        return self._track_filter.should_reid_and_register(track_id, frame_id)
+        assert len(bbox) == 4
+        xc, yc = (bbox[0] + bbox[2]) * 0.5, (bbox[1] + bbox[3]) * 0.5
 
-    def _extract_face_crop(self, image: np.ndarray, face_result: dict) -> np.ndarray:
-        """Extract and align a single face from the image."""
-        landmarks = face_result.get("landmarks")
-        keypoints = landmarks_from_dict(landmarks)
-        return face_align_and_crop(image, keypoints, self._image_size)
-
-    def _send_face_result(
-        self,
-        crop_img: np.ndarray,
-        data: StreamData,
-        result: Any,
-        face_result: dict,
-        face_index: int,
-        total_faces: int,
-    ) -> None:
-        """Send face crop result through gizmo stream."""
-        # Create crop metadata
-        crop_obj = copy.deepcopy(face_result)
-        crop_meta = self._create_crop_metadata(
-            result, crop_obj, face_index, total_faces
+        return (
+            all(x < xc for x, y in landmarks)
+            or all(x >= xc for x, y in landmarks)
+            or all(y < yc for x, y in landmarks)
+            or all(y >= yc for x, y in landmarks)
         )
 
-        # Send result
-        new_meta = data.meta.clone()
-        new_meta.remove_last(tag_inference)
-        new_meta.append(crop_meta, self.get_tags())
-        self.send_result(StreamData(crop_img, new_meta))
+    @staticmethod
+    def face_align_and_crop(
+        img: np.ndarray, landmarks: list, image_size: int
+    ) -> np.ndarray:
+        """
+        Align and crop the face from the image based on the given landmarks.
 
-    def _create_crop_metadata(
-        self, result: Any, crop_obj: dict, face_index: int, total_faces: int
-    ) -> dict:
-        """Create metadata for the cropped face."""
-        return {
-            self.key_original_result: result,
-            self.key_cropped_result: crop_obj,
-            self.key_cropped_index: face_index,
-            self.key_is_last_crop: face_index == total_faces - 1,
-        }
+        Args:
+            img (np.ndarray): The full image (not the cropped bounding box).
+            landmarks (List[np.ndarray]): List of 5 keypoints (landmarks) as (x, y) coordinates in the following order:
+                [left eye, right eye, nose, left mouth, right mouth].
+            image_size (int): The size to which the image should be resized.
 
-    def _cleanup_expired_faces(self, frame_id: int) -> None:
-        """Delete expired faces from the ReID map."""
-        if self._track_filter is not None:
-            self._track_filter.expire(frame_id)
+        Returns:
+            np.ndarray: the aligned face image
+        """
+
+        # reference keypoints for alignment:
+        # these are the coordinates of the 5 keypoints in the reference image (112x112);
+        # the order is: left eye, right eye, nose, left mouth, right mouth
+        _arcface_ref_kps = np.array(
+            [
+                [38.2946, 51.6963],
+                [73.5318, 51.5014],
+                [56.0252, 71.7366],
+                [41.5493, 92.3655],
+                [70.7299, 92.2041],
+            ],
+            dtype=np.float32,
+        )
+
+        assert len(landmarks) == 5
+        dst = _arcface_ref_kps * image_size / 112.0  # scale to the target size
+
+        M, _ = cv2.estimateAffinePartial2D(np.array(landmarks), dst, method=cv2.LMEDS)
+
+        aligned_img = cv2.warpAffine(img, M, [image_size, image_size])
+        return aligned_img
+
+
+class AlertMode(Enum):
+    """Alert mode for face search gizmo"""
+
+    NONE = 0  # no alert
+    ON_UNKNOWNS = 1  # set alert on unknown faces
+    ON_KNOWNS = 2  # set alert on known faces
+    ON_ALL = 3  # set alert on all detected faces
 
 
 class FaceSearchGizmo(Gizmo):
@@ -371,29 +488,19 @@ class FaceSearchGizmo(Gizmo):
         accumulate_embeddings: bool = False,
         alert_mode: AlertMode = AlertMode.ON_UNKNOWNS,
         alert_once: bool = True,
-        tracking_enabled: bool = True,
     ):
         """
         Constructor.
 
         Args:
-            face_reid_map (Optional[ObjectMap[FaceStatus]]): Shared storage for face identification results.
-                This is the same ObjectMap used by FaceExtractGizmo for coordination.
-                The gizmo stores identification results here so other components can access them.
-                Can be None when tracking_enabled=False for basic face recognition without tracking.
+            face_reid_map (ObjectMap): The map of face IDs to face attributes.
             db (ReID_Database): vector database object
             credence_count (int): Number of times the face is recognized before confirming it.
-                Ignored when tracking_enabled=False.
             stream_depth (int): Depth of the stream.
             allow_drop (bool): Whether to allow dropping frames.
             accumulate_embeddings (bool): Whether to accumulate embeddings in the face map.
-                Ignored when tracking_enabled=False.
             alert_mode (AlertMode): Mode of alerting for the face search.
             alert_once (bool): Whether to trigger the alert only once for the given face.
-                Ignored when tracking_enabled=False.
-            tracking_enabled (bool): If True, enables face tracking with state management.
-                Suitable for tracking pipelines with credence counting and persistent state.
-                If False, performs immediate recognition without state management.
         """
         super().__init__([(stream_depth, allow_drop)])
         self._face_reid_map = face_reid_map
@@ -402,17 +509,6 @@ class FaceSearchGizmo(Gizmo):
         self._accumulate_embeddings = accumulate_embeddings
         self._alert_mode = alert_mode
         self._alert_once = alert_once
-        self._tracking_enabled = tracking_enabled
-
-        # Validate configuration
-        if tracking_enabled and face_reid_map is None:
-            raise ValueError("face_reid_map is required when tracking_enabled=True")
-        if not tracking_enabled and face_reid_map is not None:
-            import warnings
-
-            warnings.warn(
-                "face_reid_map provided but tracking_enabled=False, state management will be bypassed"
-            )
 
     def get_tags(self) -> List[str]:
         """Get list of tags assigned to this gizmo"""
