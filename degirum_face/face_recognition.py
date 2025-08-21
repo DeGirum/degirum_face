@@ -1,55 +1,29 @@
-#
-# face_recognition.py: Comprehensive face recognition pipeline
-#
-# Copyright DeGirum Corporation 2025
-# All rights reserved
-#
-# This module provides a complete face recognition pipeline that integrates
-# face detection, embedding generation, and database management into a
-# unified API for face enrollment, verification, and identification.
-#
-# Key Features:
-# - Face Enrollment: Register new faces with quality validation
-# - Face Verification: 1:1 verification with confidence scoring
-# - Face Identification: 1:N identification with ranking
-# - Quality Control: Automatic face quality assessment and filtering
-# - Database Management: Persistent storage with deduplication
-# - Auto-configuration: Hardware-optimized model selection
-#
-# Usage Examples:
-#     from degirum_face import FaceRecognition, PipelineModelConfig
-#
-#     # Auto mode with cloud inference (recommended)
-#     face_rec = FaceRecognition.auto("hailo8")
-#
-#     # Auto mode with local inference
-#     face_rec = FaceRecognition.auto("hailo8", "@localhost")
-#
-#     # Specific models from configuration
-#     face_rec = FaceRecognition.from_config(
-#         hardware="hailo8",
-#         detector_model="yolo_v8n_face_detection",
-#         embedder_model="face_embedding_mobilenet"
-#     )
-#
-#     # Full custom control
-#     config = PipelineModelConfig(
-#         detector_model="custom_detector",
-#         embedder_model="custom_embedder",
-#         zoo_url="https://my.zoo",
-#         inference_host_address="192.168.1.100"
-#     )
-#     face_rec = FaceRecognition.custom(config)
-#
-#     # Enroll a new person
-#     face_rec.enroll_person("john_doe", ["john1.jpg", "john2.jpg", "john3.jpg"])
-#
-#     # Verify identity (1:1)
-#     is_match, confidence = face_rec.verify_person("test_image.jpg", "john_doe")
-#
-#     # Identify person (1:N)
-#     person_id, confidence = face_rec.identify_person("unknown_face.jpg")
-#
+"""
+face_recognition.py: Unified face recognition pipeline
+
+Copyright DeGirum Corporation 2025
+
+This module implements a clear, explicit face recognition pipeline:
+    - Face detection
+    - Face alignment
+    - Face embedding
+    - Database-backed identification and verification
+
+Pipeline design principles:
+    - Each step is explicit: detection, alignment, embedding, and identity assignment are separate and composable.
+    - No hidden side effects: all methods require their true inputs (e.g., align_faces always takes image and detections).
+    - Model selection is hardware-aware and configurable.
+    - Database management is robust and deduplicated.
+
+Typical usage:
+    from degirum_face import FaceRecognition
+    face_rec = FaceRecognition.auto("hailo8")
+    results = face_rec.detect_faces("image.jpg")
+    aligned = face_rec.align_faces(results.image, results.results)
+    embeddings = face_rec.get_face_embeddings(aligned)
+    identities = face_rec.get_identities(results.results, embeddings)
+    # Or use high-level identify_faces(image) for the full pipeline
+"""
 
 import numpy as np
 from pathlib import Path
@@ -79,21 +53,14 @@ class FaceRecognition:
         """
         return self.detector.detect(image_input)
 
-    def align_faces(self, image_input, detections=None):
+    def align_faces(self, image_obj, detections):
         """
-        Align and crop all faces in the input image. Returns a list of aligned face images.
-        If detections is None, will run detection first.
-        image_input can be a path, URL, numpy array, or PySDK results object.
+        Align and crop all faces in the input image using provided detections.
+        Returns a list of aligned face images.
+        Args:
+            image_obj: The image (numpy array, etc.)
+            detections: List of detection dicts/objects
         """
-        # If input is a PySDK results object, extract image and detections
-        if hasattr(image_input, "image") and hasattr(image_input, "results"):
-            image_obj = image_input.image
-            detections = image_input.results if detections is None else detections
-        else:
-            # Otherwise, run detection
-            results_obj = self.detect_faces(image_input)
-            image_obj = results_obj.image
-            detections = results_obj.results
         aligned = []
         for det in detections or []:
             landmarks = self._extract_landmarks(det)
@@ -146,19 +113,21 @@ class FaceRecognition:
     def identify_faces(self, image_input):
         """
         High-level: detect faces, align, embed, and patch labels in detections.
-        Returns detections list with 'label' and other fields for overlay.
+        Returns the PySDK results object with labeled detections and overlay image.
         """
         results_obj = self.detect_faces(image_input)
         detections = results_obj.results
+        image_obj = results_obj.image
         if not detections:
-            return []
-        aligned = self.align_faces(results_obj, detections)
+            return results_obj
+        aligned = self.align_faces(image_obj, detections)
         if not aligned:
-            return []
+            return results_obj
         embeddings = self.get_face_embeddings(aligned)
         if not embeddings:
-            return []
-        return self.get_identities(detections, embeddings)
+            return results_obj
+        self.get_identities(detections, embeddings)  # patches in-place
+        return results_obj
 
     def _select_largest_face(self, detections):
         """Select the largest face by bbox_area from detections."""
@@ -241,62 +210,34 @@ class FaceRecognition:
         *,
         db_path: str = "face_recognition.lance",
         similarity_threshold: float = 0.3,
-        quality_threshold: float = 0.5,
-        max_faces_per_image: int = 5,
         embedding_size: int = 112,
         enable_logging: bool = True,
     ):
         """
-        Initialize the face recognition pipeline with pre-configured models.
-
-        Note: This constructor is primarily for internal use. Users should prefer
-        the factory methods: auto(), from_config(), or custom().
+        Internal constructor for FaceRecognition. Use factory methods for user code.
 
         Args:
-            detector: Pre-configured FaceDetector instance
-            embedder: Pre-configured FaceEmbedder instance
+            detector: FaceDetector instance (already constructed)
+            embedder: FaceEmbedder instance (already constructed)
             db_path: Path to face database file (LanceDB format)
             similarity_threshold: Minimum similarity for face matching (0-1)
-            quality_threshold: Minimum quality score for face enrollment (0-1)
-            max_faces_per_image: Maximum faces to process per image
             embedding_size: Target size for face alignment (112 recommended)
             enable_logging: Enable detailed logging
-
-        Raises:
-            ValueError: If parameters are invalid
-            ConnectionError: If database cannot be initialized
         """
-
-        # Configure logging
         if enable_logging:
             logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
-
-        # Validate parameters
         if similarity_threshold < 0 or similarity_threshold > 1:
             raise ValueError("similarity_threshold must be between 0 and 1")
-        if quality_threshold < 0 or quality_threshold > 1:
-            raise ValueError("quality_threshold must be between 0 and 1")
-        if max_faces_per_image < 1:
-            raise ValueError("max_faces_per_image must be at least 1")
         if embedding_size <= 0:
             raise ValueError("embedding_size must be positive")
-
-        # Store configuration
         self.similarity_threshold = similarity_threshold
-        self.quality_threshold = quality_threshold
-        self.max_faces_per_image = max_faces_per_image
         self.embedding_size = embedding_size
-
-        # Store model instances
         self.detector = detector
         self.embedder = embedder
-
         self.logger.info(
             "Face recognition pipeline initialized with pre-configured models"
         )
-
-        # Initialize database
         try:
             self.db = ReID_Database(db_path, threshold=1.0 - similarity_threshold)
             self.logger.info(f"Database initialized: {db_path}")
@@ -314,76 +255,41 @@ class FaceRecognition:
         *,
         db_path: str = "face_recognition.lance",
         similarity_threshold: float = 0.3,
-        quality_threshold: float = 0.5,
-        max_faces_per_image: int = 5,
         embedding_size: int = 112,
         enable_logging: bool = True,
     ):
         """
         Create a face recognition pipeline using automatic model selection.
 
-        This method automatically selects the best available face detection
-        and embedding models for the specified hardware.
-
         Args:
             hardware: AI hardware device ("hailo8", "cuda", "cpu", etc.)
-            inference_host_address: Where to run inference
-                - "@cloud": DeGirum cloud inference
-                - "@localhost": Local inference
-                - IP address: Remote inference on specific host
+            inference_host_address: Where to run inference ("@cloud", "@localhost", or IP)
             db_path: Path to face database file
             similarity_threshold: Minimum similarity for face matching (0-1)
-            quality_threshold: Minimum quality score for face enrollment (0-1)
-            max_faces_per_image: Maximum faces to process per image
             embedding_size: Target size for face alignment (112 recommended)
             enable_logging: Enable detailed logging
 
         Returns:
             FaceRecognition instance with automatically selected models
-
-        Examples:
-            >>> # Auto mode with cloud inference
-            >>> face_rec = FaceRecognition.auto("hailo8")
-            >>>
-            >>> # Auto mode with local inference
-            >>> face_rec = FaceRecognition.auto("hailo8", "@localhost")
-            >>>
-            >>> # Auto mode with custom settings
-            >>> face_rec = FaceRecognition.auto(
-            ...     hardware="cpu",
-            ...     inference_host_address="@cloud",
-            ...     similarity_threshold=0.7,
-            ...     max_faces_per_image=3
-            ... )
         """
-
         if enable_logging:
             logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger(__name__)
-
         logger.info(
-            f"Initializing face recognition pipeline in auto mode for {hardware} "
-            f"with inference on {inference_host_address}"
+            f"Initializing face recognition pipeline in auto mode for {hardware} with inference on {inference_host_address}"
         )
-
         try:
-            # Create detector and embedder using auto mode
             detector = FaceDetector.auto(hardware, inference_host_address)
             embedder = FaceEmbedder.auto(hardware, inference_host_address)
-
             logger.info("Models loaded successfully")
-
             return cls(
                 detector=detector,
                 embedder=embedder,
                 db_path=db_path,
                 similarity_threshold=similarity_threshold,
-                quality_threshold=quality_threshold,
-                max_faces_per_image=max_faces_per_image,
                 embedding_size=embedding_size,
                 enable_logging=enable_logging,
             )
-
         except Exception as e:
             logger.error(f"Failed to create auto mode pipeline: {e}")
             raise ConnectionError(
@@ -393,87 +299,48 @@ class FaceRecognition:
     @classmethod
     def from_config(
         cls,
-        hardware: str,
         detector_model: str,
         embedder_model: str,
         inference_host_address: str = "@cloud",
         *,
         db_path: str = "face_recognition.lance",
         similarity_threshold: float = 0.6,
-        quality_threshold: float = 0.5,
-        max_faces_per_image: int = 5,
         embedding_size: int = 112,
         enable_logging: bool = True,
     ):
         """
         Create a face recognition pipeline using specific models from configuration.
 
-        This method loads specific face detection and embedding models from
-        the built-in model configuration for the specified hardware.
-
         Args:
-            hardware: AI hardware device ("hailo8", "cuda", "cpu", etc.)
             detector_model: Face detector model name from configuration
             embedder_model: Face embedder model name from configuration
             inference_host_address: Where to run inference
             db_path: Path to face database file
             similarity_threshold: Minimum similarity for face matching (0-1)
-            quality_threshold: Minimum quality score for face enrollment (0-1)
-            max_faces_per_image: Maximum faces to process per image
             embedding_size: Target size for face alignment (112 recommended)
             enable_logging: Enable detailed logging
 
         Returns:
             FaceRecognition instance with specified models from config
-
-        Examples:
-            >>> # Use specific models from config
-            >>> face_rec = FaceRecognition.from_config(
-            ...     hardware="hailo8",
-            ...     detector_model="yolo_v8n_face_detection",
-            ...     embedder_model="face_embedding_mobilenet"
-            ... )
-            >>>
-            >>> # With remote inference
-            >>> face_rec = FaceRecognition.from_config(
-            ...     hardware="hailo8",
-            ...     detector_model="yolo_v8n_face_detection",
-            ...     embedder_model="face_embedding_mobilenet",
-            ...     inference_host_address="192.168.1.100"
-            ... )
         """
-
         if enable_logging:
             logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger(__name__)
-
         logger.info(
-            f"Initializing face recognition pipeline from config for {hardware} "
-            f"with models: {detector_model}, {embedder_model}"
+            f"Initializing face recognition pipeline from config with models: {detector_model}, {embedder_model}"
         )
-
         try:
-            # Create detector and embedder using from_config mode
-            detector = FaceDetector.from_config(
-                hardware, detector_model, inference_host_address
-            )
-            embedder = FaceEmbedder.from_config(
-                hardware, embedder_model, inference_host_address
-            )
-
+            detector = FaceDetector.from_config(detector_model, inference_host_address)
+            embedder = FaceEmbedder.from_config(embedder_model, inference_host_address)
             logger.info("Models loaded successfully from configuration")
-
             return cls(
                 detector=detector,
                 embedder=embedder,
                 db_path=db_path,
                 similarity_threshold=similarity_threshold,
-                quality_threshold=quality_threshold,
-                max_faces_per_image=max_faces_per_image,
                 embedding_size=embedding_size,
                 enable_logging=enable_logging,
             )
-
         except Exception as e:
             logger.error(f"Failed to create pipeline from config: {e}")
             raise ConnectionError(
@@ -487,54 +354,25 @@ class FaceRecognition:
         *,
         db_path: str = "face_recognition.lance",
         similarity_threshold: float = 0.6,
-        quality_threshold: float = 0.5,
-        max_faces_per_image: int = 5,
         embedding_size: int = 112,
         enable_logging: bool = True,
     ):
         """
         Create a face recognition pipeline with full custom model control.
 
-        This method provides complete control over model loading by accepting
-        a PipelineModelConfig that specifies exact model names, zoo URLs,
-        and inference locations.
-
         Args:
             config: PipelineModelConfig with custom model specifications
             db_path: Path to face database file
             similarity_threshold: Minimum similarity for face matching (0-1)
-            quality_threshold: Minimum quality score for face enrollment (0-1)
-            max_faces_per_image: Maximum faces to process per image
             embedding_size: Target size for face alignment (112 recommended)
             enable_logging: Enable detailed logging
 
         Returns:
             FaceRecognition instance with fully custom models
-
-        Examples:
-            >>> # Full custom configuration
-            >>> config = PipelineModelConfig(
-            ...     detector_model="yolo_v8n_face_detection--512x512_quant_n2x_orca1_bgr",
-            ...     embedder_model="face_embedding_mobilenet--112x112_quant_n2x_orca1_bgr",
-            ...     zoo_url="https://cs.degirum.com/degirum/orca",
-            ...     inference_host_address="192.168.1.100"
-            ... )
-            >>> face_rec = FaceRecognition.custom(config)
-            >>>
-            >>> # Cloud inference with custom models
-            >>> config = PipelineModelConfig(
-            ...     detector_model="custom_face_detector_v2",
-            ...     embedder_model="custom_face_embedder_v2",
-            ...     zoo_url="https://my.custom.zoo",
-            ...     inference_host_address="@cloud"
-            ... )
-            >>> face_rec = FaceRecognition.custom(config, similarity_threshold=0.8)
         """
-
         if enable_logging:
             logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger(__name__)
-
         logger.info(
             f"Initializing face recognition pipeline with custom config:\n"
             f"  Detector: {config.detector_model}\n"
@@ -542,29 +380,22 @@ class FaceRecognition:
             f"  Zoo URL: {config.zoo_url}\n"
             f"  Inference: {config.inference_host_address}"
         )
-
         try:
-            # Create detector and embedder using custom mode
             detector = FaceDetector.custom(
                 config.detector_model, config.zoo_url, config.inference_host_address
             )
             embedder = FaceEmbedder.custom(
                 config.embedder_model, config.zoo_url, config.inference_host_address
             )
-
             logger.info("Custom models loaded successfully")
-
             return cls(
                 detector=detector,
                 embedder=embedder,
                 db_path=db_path,
                 similarity_threshold=similarity_threshold,
-                quality_threshold=quality_threshold,
-                max_faces_per_image=max_faces_per_image,
                 embedding_size=embedding_size,
                 enable_logging=enable_logging,
             )
-
         except Exception as e:
             logger.error(f"Failed to create custom pipeline: {e}")
             raise ConnectionError(
