@@ -428,6 +428,47 @@ Two aligned face crops are passed through the embedding model, producing two vec
 
 > **Tip:** Use L2-normalized embeddings for best results with cosine similarity. Regularly evaluate your embedding model on your data to ensure good performance.
 
+## Understanding the Recognition Stage
+
+### What is the Recognition Stage?
+
+The recognition stage is responsible for matching each detected and embedded face to a database of known identities. This is where the system determines "who" a face belongs to, or if it is unknown, by comparing the extracted face embedding to a reference database.
+
+### How the Recognition Stage Works
+
+- For each face embedding produced by the embedding model, the system searches a vector database (e.g., `ReID_Database`) to find the closest match.
+- The embedding is normalized and compared to all stored embeddings using a similarity metric (typically cosine similarity).
+- The best match is selected, and the corresponding identity and attributes are retrieved.
+- If no match is found above a certain confidence threshold, the face is marked as "unknown."
+
+### Key Steps
+
+1. **Embedding Normalization:** Each face embedding is L2-normalized to ensure fair comparison.
+2. **Database Search:** The normalized embedding is compared to all entries in the face database.
+3. **Identity Assignment:** The closest match (if any) is assigned as the face's identity; otherwise, the face is labeled as unknown.
+4. **Attribute Update:** The face's attributes (e.g., name, metadata) are updated in the tracking map.
+5. **Confirmation Logic:** The system tracks how many consecutive frames a face is recognized as the same identity before confirming it (see Identity Confirmation).
+6. **Alerting:** If configured, the system can trigger alerts when a known or unknown face is recognized.
+
+### Why Use the Recognition Stage?
+
+- **Identification:** Assigns real-world identities to detected faces.
+- **Access Control & Analytics:** Enables applications like attendance, access control, or customer analytics.
+- **Event Triggering:** Supports alerting and downstream actions based on recognized or unknown faces.
+
+### Example Flow
+
+1. A face is detected, aligned, and embedded.
+2. The embedding is searched against the database.
+3. If a match is found, the face is labeled with the corresponding identity and attributes.
+4. If no match is found, the face is labeled as "unknown."
+5. The recognition result is used for confirmation, annotation, and possible alerting.
+
+### Best Practices
+
+- **Database Quality:** Use high-quality, diverse images for each identity in the database.
+- **Threshold Tuning:** Adjust similarity thresholds to balance false positives and false negatives.
+- **Regular Updates:** Periodically update the database with new embeddings to improve recognition accuracy.
 
 
 ## Understanding Identity Confirmation Logic
@@ -545,13 +586,13 @@ else:
 - After face detection, tracking, and confirmation, the annotation stage assigns labels and attributes before results are displayed, logged, or used for alerts.
 - This ensures that only confirmed identities are shown as known, while new or unconfirmed faces are clearly marked.
 
-# Understanding the Alerting Stage
+## Understanding the Alerting Stage
 
-## What is Alerting?
+### What is Alerting?
 
 Alerting is the stage in the face recognition pipeline that triggers notifications, logs, or actions when certain face events occur—such as a known or unknown person being confirmed. It enables real-time responses to security or business events.
 
-## How Alerting Works
+### How Alerting Works
 
 At each frame, the system checks the status of every tracked face. When a face is confirmed (i.e., recognized as the same identity for enough frames), the system decides whether to trigger an alert based on configurable rules:
 
@@ -588,13 +629,13 @@ Alerts can be handled by downstream logic, such as sending notifications, loggin
 
 If repeated alerts are allowed, the alert status can be reset when the face's attributes change.
 
-## Why Use Alerting?
+### Why Use Alerting?
 
 - **Real-Time Response:** Enables immediate action when important events occur (e.g., unauthorized entry).
 - **Security:** Notifies staff or systems of unknown or specific known individuals.
 - **Automation:** Integrates with external systems for automated responses (e.g., open doors, trigger alarms).
 
-## Example: Configuring and Using Alerting
+### Example: Configuring and Using Alerting
 
 Suppose you want to alert only on unknown faces, and only once per face:
 
@@ -613,14 +654,14 @@ for face in faces:
             face.is_alerted = True
 ```
 
-## Typical Use Case
+### Typical Use Case
 
 1. After annotation and confirmation, the alerting stage checks each face for alert conditions.
 2. If a condition is met, an alert is triggered and can be consumed by downstream logic (UI, logs, notifications).
 3. Alerts are deduplicated per face unless configured otherwise.
 
 
-## Tips and Best Practices
+### Tips and Best Practices
 
 - Choose the appropriate alerting rule for your application (e.g., only alert on unknowns for security, or on all faces for analytics).
 - Use the `alert_once` flag to control whether repeated alerts are allowed for the same face.
