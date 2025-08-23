@@ -223,43 +223,43 @@ The **Face Filters System** is a modular set of filters that operate on detected
 
 The system typically includes the following filters (see `face_filters.py`):
 
-#### 1. Landmarks Filter
+### 1. Landmarks Filter
 - **Purpose:** Ensures that a face detection has a valid set of facial landmarks (eyes, nose, mouth, etc.).
 - **Logic:** If landmarks are missing or invalid, the detection is filtered out.
 
-#### 2. Size Filter
+### 2. Size Filter
 - **Purpose:** Removes faces that are too small or too large for reliable recognition.
 - **Parameters:** `min_size`, `max_size` (in pixels or relative to frame size).
 - **Logic:** If the bounding box size is outside the allowed range, the detection is filtered out.
 
-#### 3. Zone Filter
+### 3. Zone Filter
 - **Purpose:** Restricts recognition to faces within a specific region of the frame (e.g., a door area).
 - **Parameters:** `zone` (polygon or rectangle coordinates).
 - **Logic:** If the face center is outside the zone, the detection is filtered out.
 
-#### 4. Frontalness Filter
+### 4. Frontal Pose Filter
 - **Purpose:** Ensures that only faces looking toward the camera are processed.
-- **Parameters:** `min_frontalness` (threshold for how "frontal" the face must be).
-- **Logic:** Uses pose estimation or landmark symmetry to estimate frontalness; filters out faces below the threshold.
+- **Parameters:** `min_frontal_pose_score` (threshold for how "frontal" the face must be).
+- **Logic:** Uses pose estimation or landmark symmetry to estimate the frontal pose score; filters out faces below the threshold.
 
-#### 5. Shift Filter
-- **Purpose:** Removes faces that are not well-centered in their bounding box (e.g., due to partial occlusion or poor detection).
-- **Parameters:** `max_shift` (maximum allowed offset of landmarks from box center).
-- **Logic:** If the face is shifted too far from the box center, it is filtered out.
+### 5. Centeredness Filter
+- **Purpose:** Removes faces whose landmark centroid is too far from the center of their bounding box (e.g., due to partial occlusion, poor detection, or cropping).
+- **Parameters:** `max_center_offset` (maximum allowed normalized offset between landmark centroid and box center).
+- **Logic:** If the normalized distance between the landmark centroid and the bounding box center exceeds the threshold, the face is filtered out.
 
 ### How Filters Are Applied
 
 Filters are typically applied in sequence. A face must pass all filters to be accepted. The filter pipeline can be customized by enabling/disabling filters or adjusting their parameters.
 
-#### Example Filter Pipeline
+### Example Filter Pipeline
 
 ```python
 filters = [
     LandmarksFilter(),
     SizeFilter(min_size=40, max_size=400),
     ZoneFilter(zone=roi_polygon),
-    FrontalnessFilter(min_frontalness=0.7),
-    ShiftFilter(max_shift=0.2),
+    FrontalPoseFilter(min_frontal_pose_score=0.7),
+    CenterednessFilter(max_center_offset=0.2),
 ]
 
 for face in detected_faces:
@@ -269,7 +269,7 @@ for face in detected_faces:
 
 ### Customizing Filters
 
-- **Parameters:** Tune thresholds (e.g., `min_size`, `min_frontalness`) for your application and camera setup.
+- **Parameters:** Tune thresholds (e.g., `min_size`, `min_frontal_pose_score`, `max_center_offset`) for your application and camera setup.
 - **Order:** Place stricter or cheaper filters first for efficiency.
 - **Extensibility:** Implement custom filters by subclassing the base filter class and adding them to the pipeline.
 
@@ -707,4 +707,3 @@ if alert_event:
 - When an alert is triggered, a video clip is saved and can later be reviewed and annotated.
 - The system supports workflows for managing, annotating, and updating the face database using stored clips.
 
----

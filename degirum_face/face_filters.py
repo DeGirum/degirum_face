@@ -167,8 +167,7 @@ class FaceFilterConfig:
                       Set to 0 to disable size filtering.
         zone_ids: List of zone IDs to process. None means process all zones.
                  Only faces within these zones will be processed.
-        enable_frontal_filter: Whether to filter out non-frontal faces.
-                              Uses geometric analysis of facial landmarks.
+        min_frontal_pose_score: Minimum frontal pose score required to accept a face (0.0 disables filter).
         enable_shift_filter: Whether to filter out shifted faces.
                            Removes faces positioned at edges of bounding boxes.
 
@@ -192,8 +191,8 @@ class FaceFilterConfig:
 
     min_face_size: int = 0
     zone_ids: Optional[List[int]] = None
-    enable_frontal_filter: bool = True
-    enable_shift_filter: bool = True
+    min_frontal_pose_score: float = 0.0
+    max_center_offset: float = 0.2  # Fraction of bbox size; 0 disables filter
 
     def __post_init__(self):
         """Validate configuration parameters."""
@@ -240,16 +239,23 @@ class FaceFilter:
             face_result["reject_reason"] = "not_in_zone"
             return face_result
 
-        # 4. Check if frontal
-        if self.config.enable_frontal_filter and not self._is_face_frontal(face_result):
-            face_result["face_rejected"] = True
-            face_result["reject_reason"] = "not_frontal"
-            return face_result
+        # 4. Check frontal pose score
+        if self.config.min_frontal_pose_score > 0.0:
+            score = self._frontal_pose_score(face_result)
+            if score < self.config.min_frontal_pose_score:
+                face_result["face_rejected"] = True
+                face_result["reject_reason"] = "frontal_pose_too_low"
+                face_result["frontal_pose_score"] = score
+                return face_result
 
-        # 5. Check if shifted
-        if self.config.enable_shift_filter and self._is_face_shifted(face_result):
+        # 5. Check centeredness
+        if (
+            self.config.max_center_offset > 0.0
+            and self._centeredness_offset(face_result) > self.config.max_center_offset
+        ):
             face_result["face_rejected"] = True
-            face_result["reject_reason"] = "face_shifted"
+            face_result["reject_reason"] = "face_off_center"
+            face_result["centeredness_offset"] = self._centeredness_offset(face_result)
             return face_result
 
         # Passed all filters
@@ -356,12 +362,17 @@ class FaceFilter:
         if not self._is_face_in_zones(face_result):
             return False
 
-        # 4. Check if frontal (expensive - geometric computation)
-        if self.config.enable_frontal_filter and not self._is_face_frontal(face_result):
-            return False
+        # 4. Check frontal pose score (expensive - geometric computation)
+        if self.config.min_frontal_pose_score > 0.0:
+            score = self._frontal_pose_score(face_result)
+            if score < self.config.min_frontal_pose_score:
+                return False
 
-        # 5. Check if shifted (expensive - coordinate analysis)
-        if self.config.enable_shift_filter and self._is_face_shifted(face_result):
+        # 5. Check centeredness (expensive - coordinate analysis)
+        if (
+            self.config.max_center_offset > 0.0
+            and self._centeredness_offset(face_result) > self.config.max_center_offset
+        ):
             return False
 
         return True
@@ -483,199 +494,74 @@ class FaceFilter:
 
         return any(in_zone[zid] for zid in self.config.zone_ids if zid < len(in_zone))
 
-    def _is_face_frontal(self, face_result: dict) -> bool:
+    def _frontal_pose_score(self, face_result: dict) -> float:
         """
-        Check if face is oriented frontally based on landmark geometry.
+        Compute a frontal pose score for the face based on landmark geometry.
 
-        Analyzes facial landmark positions to determine face orientation.
-        Frontal faces typically provide better recognition accuracy.
-
-        Args:
-            face_result: Face detection result containing landmarks
-
-        Returns:
-            True if face appears to be frontal, False if profile/angled
-
-        Algorithm Details:
-            - Uses geometric analysis of facial landmark positions
-            - Delegates to optimized implementation for consistency
-            - Handles landmark parsing and error cases gracefully
-
-        Quality Impact:
-            - Frontal faces yield more consistent feature embeddings
-            - Profile faces often produce unreliable recognition results
-            - Filtering improves overall system accuracy
-
-        Error Handling:
-            - Returns False for malformed landmarks
-            - Gracefully handles parsing failures
-            - Consistent with other filter methods
+        Returns a float in [0, 1], where 1.0 is perfectly frontal and lower values indicate more profile/angled faces.
+        Returns 0.0 for malformed landmarks.
         """
         landmarks = face_result.get("landmarks")
         if not landmarks or len(landmarks) != 5:
-            return False
-
+            return 0.0
         try:
             keypoints = landmarks_from_dict(landmarks)
-            return self._face_is_frontal_impl(keypoints)
+            return self._frontal_pose_score_impl(keypoints)
         except (ValueError, IndexError):
-            return False
+            return 0.0
 
-    def _is_face_shifted(self, face_result: dict) -> bool:
+    def _frontal_pose_score_impl(landmarks: List[np.ndarray]) -> float:
         """
-        Check if face is improperly positioned within its bounding box.
+        Returns a score in [0, 1] based on estimated yaw angle from landmarks.
+        1.0 = perfectly frontal, 0.0 = at or beyond max_yaw degrees.
+        """
+        if len(landmarks) != 5:
+            return 0.0
+        # Estimate yaw from the relative x distance between eyes and nose
+        left_eye = landmarks[FaceLandmarkIndex.LEFT_EYE]
+        right_eye = landmarks[FaceLandmarkIndex.RIGHT_EYE]
+        nose = landmarks[FaceLandmarkIndex.NOSE]
+        # Compute the midpoint between the eyes
+        eye_mid = (left_eye + right_eye) / 2.0
+        # Vector from eye midpoint to nose
+        vec = nose - eye_mid
+        # Eye vector (horizontal axis)
+        eye_vec = right_eye - left_eye
+        # Normalize
+        eye_dist = np.linalg.norm(eye_vec)
+        if eye_dist == 0:
+            return 0.0
+        # Project vec onto the eye vector (horizontal axis)
+        horizontal_offset = np.dot(vec, eye_vec) / eye_dist
+        # Yaw is proportional to horizontal offset normalized by eye distance
+        yaw_norm = horizontal_offset / eye_dist
+        # Clamp to [-1, 1] for safety
+        yaw_norm = np.clip(yaw_norm, -1.0, 1.0)
+        # Convert to degrees (approximate, for interpretability)
+        max_yaw_deg = 45.0  # faces beyond 45 degrees are considered non-frontal
+        # Map normalized offset to degrees (assuming max offset ~eye_dist)
+        yaw_deg = yaw_norm * max_yaw_deg
+        # Score: 1.0 for 0 deg, 0.0 for >= max_yaw_deg
+        score = 1.0 - min(abs(yaw_deg), max_yaw_deg) / max_yaw_deg
+        return float(np.clip(score, 0.0, 1.0))
 
-        Detects faces that are poorly centered or cropped, which can
-        negatively impact recognition accuracy.
-
-        Args:
-            face_result: Face detection result with bbox and landmarks
-
-        Returns:
-            True if face appears shifted/poorly positioned, False if well-centered
-
-        Shift Detection Logic:
-            - Analyzes landmark positions relative to bounding box
-            - Checks for proper centering and margin consistency
-            - Delegates to optimized implementation for accuracy
-
-        Quality Impact:
-            - Well-centered faces produce better feature embeddings
-            - Shifted faces may be partially cropped or poorly framed
-            - Filtering improves recognition consistency
-
-        Conservative Approach:
-            - Returns True (shifted) when detection is uncertain
-            - Prefers false positives over false negatives
-            - Ensures only high-quality faces proceed to recognition
-
-        Error Handling:
-            - Assumes shifted for malformed input data
-            - Gracefully handles missing bbox or landmarks
-            - Consistent error behavior across filter methods
+    def _centeredness_offset(self, face_result: dict) -> float:
+        """
+        Compute the normalized offset between the landmark centroid and bbox center.
+        Returns a value in [0, inf), where 0 is perfectly centered.
+        Returns 1.0 if data is malformed.
         """
         bbox = face_result.get("bbox")
         landmarks = face_result.get("landmarks")
         if not bbox or not landmarks or len(landmarks) != 5:
-            return True  # assume shifted if we can't tell
-
+            return 1.0  # treat as off-center if we can't tell
         try:
             keypoints = landmarks_from_dict(landmarks)
-            return self._face_is_shifted_impl(bbox, keypoints)
-        except (ValueError, IndexError):
-            return True
-
-    @staticmethod
-    def _face_is_frontal_impl(landmarks: List[np.ndarray]) -> bool:
-        """
-        Core implementation of frontal face detection using geometric analysis.
-
-        Determines face orientation by analyzing the spatial relationship
-        between facial landmarks using computational geometry.
-
-        Args:
-            landmarks: List of 5 keypoints in standard order:
-                [left_eye, right_eye, nose, left_mouth, right_mouth]
-
-        Returns:
-            True if face appears frontal, False if profile/angled
-
-        Algorithm Details:
-            - Creates quadrilateral from eye and mouth corners
-            - Tests if nose landmark falls inside this quadrilateral
-            - Uses OpenCV's point-in-polygon test for robust detection
-
-        Geometric Principle:
-            For frontal faces, the nose should be positioned within the
-            quadrilateral formed by connecting the eye and mouth corners.
-            Profile faces will have the nose outside this region.
-
-        Quadrilateral Construction:
-            - Top edge: left_eye → right_eye
-            - Right edge: right_eye → right_mouth
-            - Bottom edge: right_mouth → left_mouth
-            - Left edge: left_mouth → left_eye
-
-        Robustness Features:
-            - Handles various face sizes and orientations
-            - Accounts for minor landmark detection noise
-            - Uses floating-point precision for accuracy
-
-        Performance: O(1) - constant time geometric test
-        Accuracy: High for typical face detection scenarios
-
-        Raises:
-            ValueError: If landmarks count is not exactly 5
-        """
-        if len(landmarks) != 5:
-            raise ValueError(f"Expected 5 landmarks, got {len(landmarks)}")
-
-        quad = np.array(
-            [
-                landmarks[FaceLandmarkIndex.LEFT_EYE],  # left eye
-                landmarks[FaceLandmarkIndex.RIGHT_EYE],  # right eye
-                landmarks[FaceLandmarkIndex.RIGHT_MOUTH],  # right mouth
-                landmarks[FaceLandmarkIndex.LEFT_MOUTH],  # left mouth
-            ],
-            dtype=np.float32,
-        )
-        nose = landmarks[FaceLandmarkIndex.NOSE]
-        return cv2.pointPolygonTest(quad, tuple(nose), measureDist=False) > 0
-
-    @staticmethod
-    def _face_is_shifted_impl(bbox: List[float], landmarks: List[np.ndarray]) -> bool:
-        """
-        Core implementation of face shift detection algorithm.
-
-        Analyzes landmark distribution within the bounding box to detect
-        poorly positioned or cropped faces that may impact recognition quality.
-
-        Args:
-            bbox: Bounding box coordinates [x1, y1, x2, y2]
-            landmarks: List of facial landmark points as numpy arrays
-
-        Returns:
-            True if face appears shifted/poorly positioned, False if well-centered
-
-        Algorithm Details:
-            - Calculates bounding box center point
-            - Tests if all landmarks cluster on one side of center
-            - Detects both horizontal and vertical shifting patterns
-
-        Shift Detection Logic:
-            1. Compute bbox center: (x_center, y_center)
-            2. Check if all landmarks are left OR right of x_center
-            3. Check if all landmarks are above OR below y_center
-            4. Return True if any clustering pattern is detected
-
-        Quality Rationale:
-            - Well-centered faces have landmarks distributed around center
-            - Shifted faces cluster landmarks on one side (poor cropping)
-            - Such faces often produce inconsistent recognition results
-
-        Use Cases:
-            - Detecting edge-of-frame faces (partially visible)
-            - Identifying poorly cropped face regions
-            - Filtering faces with inadequate margins
-
-        Performance: O(n) where n = number of landmarks (typically 5)
-        Accuracy: High for detecting obvious positioning issues
-
-        Raises:
-            ValueError: If bbox doesn't contain exactly 4 coordinates
-
-        Example Patterns:
-            - All landmarks left of center: shifted right
-            - All landmarks above center: shifted up
-            - Mixed distribution: well-centered (not shifted)
-        """
-        if len(bbox) != 4:
-            raise ValueError(f"Expected bbox with 4 coordinates, got {len(bbox)}")
-
-        xc, yc = (bbox[0] + bbox[2]) * 0.5, (bbox[1] + bbox[3]) * 0.5
-        return (
-            all(x < xc for x, y in landmarks)
-            or all(x >= xc for x, y in landmarks)
-            or all(y < yc for x, y in landmarks)
-            or all(y >= yc for x, y in landmarks)
-        )
+            centroid = np.mean(keypoints, axis=0)
+            xc, yc = (bbox[0] + bbox[2]) * 0.5, (bbox[1] + bbox[3]) * 0.5
+            w = abs(bbox[2] - bbox[0])
+            h = abs(bbox[3] - bbox[1])
+            norm_dist = np.linalg.norm(centroid - np.array([xc, yc])) / max(w, h)
+            return float(norm_dist)
+        except Exception:
+            return 1.0
