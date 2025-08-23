@@ -1,0 +1,58 @@
+
+
+# Example pipeline configuration
+
+source:
+  type: camera
+  value: 0
+
+face_detector:
+  creation_mode: auto
+  hardware: "hailo8"
+  inference_host_address: "@cloud"
+  devices: [0]
+
+face_embedder:
+  creation_mode: custom
+  model_name: mbf_w600k--112x112_float_n2x_orca1_1
+  model_zoo_url: degirum/public
+  inference_host_address: "@cloud"
+  devices: [0]
+
+analyzers:
+  tracker:
+    enabled: true
+  zone_counter:
+    enabled: true
+    zones: []
+    
+# --- Filtering Stages ---
+face_filters:
+  - min_face_size: 80           # Minimum face size in pixels (0 disables)
+    zone_ids: [0, 1, 2]         # List of allowed zone IDs (null for all)
+    enable_frontal_filter: true # Filter out non-frontal faces
+    enable_shift_filter: true   # Filter out shifted faces
+
+# --- reID Scheduling and Identity Confirmation ---
+reid_scheduler:
+  reid_expiration_frames: 10   # Number of frames to skip before repeating face reID for the same track
+
+identity_confirmation:
+  credence_count: 4       # Number of consecutive matches required to confirm an identity
+
+# --- Optional Stages ---
+alert:
+  enabled: true
+  mode: "on_unknowns"
+  notification_message: '{time}: **Unknown** person detected.'
+
+storage:
+  db_filename: "temp/face_reid_db.lance"
+  clip_duration: 100
+  endpoint: ./temp
+  access_key: ""
+  secret_key: ""
+  bucket: unknown_faces
+
+
+

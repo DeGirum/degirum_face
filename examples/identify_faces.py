@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from degirum_face import FaceRecognition
 import degirum_tools
+from degirum_face.face_filters import FaceFilter, FaceFilterConfig
 
 if len(sys.argv) != 2:
     print("Usage: python identify_faces.py <image_path>")
@@ -20,11 +21,17 @@ if len(sys.argv) != 2:
 
 image_path = sys.argv[1]
 
-face_rec = FaceRecognition.auto("hailo8", enable_logging=False)
+from degirum_face.face_filters import FaceFilterConfig
+
+# Set a threshold that will always reject faces (e.g., min_face_size very large)
+reject_all_config = FaceFilterConfig(min_face_size=10)  # Unrealistically large
+face_filter = FaceFilter(reject_all_config)
+face_rec = FaceRecognition.auto("hailo8", enable_logging=False, face_filter=face_filter)
 
 results_obj = face_rec.identify_faces(image_path)
 
 detections = results_obj.results
+print(detections)
 if not detections:
     print("No faces found.")
 else:

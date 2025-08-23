@@ -12,6 +12,9 @@ This module implements a clear, explicit face recognition pipeline:
 Pipeline design principles:
     - Each step is explicit: detection, alignment, embedding, and identity assignment are separate and composable.
     - No hidden side effects: all methods require their true inputs (e.g., align_faces always takes image and detections).
+    - Filtering is annotation-based: detections are never removed, only annotated (e.g., face_rejected, reject_reason).
+    - All pipeline steps always receive the full list of detections and are robust to missing or repeated processing.
+    - The pipeline is robust to user errors: steps can be run out of order or multiple times without crashing.
     - Model selection is hardware-aware and configurable.
     - Database management is robust and deduplicated.
 
@@ -23,6 +26,7 @@ Typical usage:
     embeddings = face_rec.get_face_embeddings(aligned)
     identities = face_rec.get_identities(results.results, embeddings)
     # Or use high-level identify_faces(image) for the full pipeline
+    # Filtering is explicit and composable; all detections are always passed through the pipeline.
 """
 
 import numpy as np
@@ -42,54 +46,82 @@ from .face_utils import (
     validate_landmarks,
 )
 
+# Optional: import default face filter utility
+try:
+    from .face_filters_integration import get_default_face_filter
+except ImportError:
+    get_default_face_filter = None
+
 
 class FaceRecognition:
     # ...existing code...
+
+    def filter_faces(self, detections):
+        """
+        Annotate each detection with face_rejected and reject_reason using self.face_filter.
+        Filtering is annotation-based: detections are never removed, only marked as rejected.
+        Always returns the full detections list (in-place modification).
+        Downstream steps skip rejected faces but always receive the full list.
+        This method is robust to being called multiple times or omitted entirely.
+        """
+        if self.face_filter is not None and detections:
+            for det in detections:
+                self.face_filter.filter_face_with_reason(det)
+        return detections
 
     def detect_faces(self, image_input):
         """
         Detect faces in the input image using the detector. Returns the PySDK results object.
         Accepts any input supported by the detector (path, URL, numpy array, PIL, etc).
+        No filtering is performed here; all detections are returned.
         """
         return self.detector.detect(image_input)
 
     def align_faces(self, image_obj, detections):
         """
         Align and crop all faces in the input image using provided detections.
-        Returns a list of aligned face images.
+        Skips detections with face_rejected=True (if present).
+        Returns a list of (detection, aligned_face) tuples for non-rejected faces.
         Args:
             image_obj: The image (numpy array, etc.)
-            detections: List of detection dicts/objects
+            detections: List of detection dicts/objects (all, including rejected)
+        This method is robust to missing or repeated filtering; it only processes non-rejected faces.
         """
-        aligned = []
-        for det in detections or []:
-            landmarks = self._extract_landmarks(det)
+        aligned_pairs = []
+        for detection in detections or []:
+            if detection.get("face_rejected", False):
+                continue
+            landmarks = self._extract_landmarks(detection)
             if landmarks is not None:
-                face = self._align_face(image_obj, landmarks)
-                if face is not None:
-                    aligned.append(face)
-        return aligned
+                aligned_face = self._align_face(image_obj, landmarks)
+                if aligned_face is not None:
+                    aligned_pairs.append((detection, aligned_face))
+        return aligned_pairs
 
-    def get_face_embeddings(self, aligned_faces):
+    def get_face_embeddings(self, aligned_pairs):
         """
-        Get embeddings for a list of aligned face images. Returns a list of embedding vectors.
+        Get embeddings for a list of (detection, aligned_face) pairs.
+        Returns a list of (detection, embedding) pairs.
+        This method is robust to missing or repeated alignment; it only processes aligned faces.
         """
-        embeddings = []
-        for face in aligned_faces:
-            embedding_result = self.embedder.embed(face)
+        embedding_pairs = []
+        for detection, aligned_face in aligned_pairs:
+            embedding_result = self.embedder.embed(aligned_face)
             if embedding_result is not None and embedding_result.results:
                 embedding_data = embedding_result.results[0].get("data")
                 if embedding_data is not None:
-                    embeddings.append(normalize_embedding(np.array(embedding_data)))
-        return embeddings
+                    embedding = normalize_embedding(np.array(embedding_data))
+                    embedding_pairs.append((detection, embedding))
+        return embedding_pairs
 
-    def get_identities(self, detections, embeddings):
+    def get_identities(self, detections, embedding_pairs):
         """
         Patch the 'label' field in detections in-place using the provided embeddings.
+        Only updates detections that have embeddings (non-rejected faces).
         Returns the detections list with updated labels (for image_overlay compatibility).
-        Now uses the score returned by get_attributes_by_embedding directly.
+        This method is robust to missing or repeated embedding; it only updates detections with embeddings.
         """
-        for det, embedding in zip(detections, embeddings):
+        for detection, embedding in embedding_pairs:
             person_id, person_name, score = self.db.get_attributes_by_embedding(
                 embedding
             )
@@ -99,34 +131,38 @@ class FaceRecognition:
                 and score is not None
                 and score >= self.similarity_threshold
             ):
-                det["label"] = person_name
-                det["person_name"] = person_name
-                det["similarity"] = score
-                det["db_result"] = person_id
+                detection["label"] = person_name
+                detection["person_name"] = person_name
+                detection["similarity"] = score
+                detection["db_result"] = person_id
             else:
-                det["label"] = "Unknown"
-                det["person_name"] = None
-                det["similarity"] = score if score is not None else 0.0
-                det["db_result"] = person_id
+                detection["label"] = "Unknown"
+                detection["person_name"] = None
+                detection["similarity"] = score if score is not None else 0.0
+                detection["db_result"] = person_id
         return detections
 
     def identify_faces(self, image_input):
         """
-        High-level: detect faces, align, embed, and patch labels in detections.
+        High-level: detect faces, filter, align, embed, and patch labels in detections.
         Returns the PySDK results object with labeled detections and overlay image.
+        Filtering is explicit and annotation-based: detections are never removed, only marked as rejected.
+        Downstream steps skip rejected faces but always receive the full list.
+        The pipeline is robust to missing or repeated filtering, alignment, or embedding steps, and will not crash if steps are run out of order or multiple times.
         """
         results_obj = self.detect_faces(image_input)
         detections = results_obj.results
         image_obj = results_obj.image
         if not detections:
             return results_obj
-        aligned = self.align_faces(image_obj, detections)
-        if not aligned:
+        self.filter_faces(detections)
+        aligned_pairs = self.align_faces(image_obj, detections)
+        if not aligned_pairs:
             return results_obj
-        embeddings = self.get_face_embeddings(aligned)
-        if not embeddings:
+        embedding_pairs = self.get_face_embeddings(aligned_pairs)
+        if not embedding_pairs:
             return results_obj
-        self.get_identities(detections, embeddings)  # patches in-place
+        self.get_identities(detections, embedding_pairs)  # patches in-place
         return results_obj
 
     def _select_largest_face(self, detections):
@@ -212,6 +248,7 @@ class FaceRecognition:
         similarity_threshold: float = 0.3,
         embedding_size: int = 112,
         enable_logging: bool = True,
+        face_filter=None,
     ):
         """
         Internal constructor for FaceRecognition. Use factory methods for user code.
@@ -235,6 +272,7 @@ class FaceRecognition:
         self.embedding_size = embedding_size
         self.detector = detector
         self.embedder = embedder
+        self.face_filter = face_filter  # Optional FaceFilter instance
         self.logger.info(
             "Face recognition pipeline initialized with pre-configured models"
         )
@@ -257,6 +295,7 @@ class FaceRecognition:
         similarity_threshold: float = 0.3,
         embedding_size: int = 112,
         enable_logging: bool = True,
+        face_filter=None,
     ):
         """
         Create a face recognition pipeline using automatic model selection.
@@ -289,6 +328,7 @@ class FaceRecognition:
                 similarity_threshold=similarity_threshold,
                 embedding_size=embedding_size,
                 enable_logging=enable_logging,
+                face_filter=face_filter,
             )
         except Exception as e:
             logger.error(f"Failed to create auto mode pipeline: {e}")

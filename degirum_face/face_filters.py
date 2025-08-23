@@ -212,6 +212,51 @@ class FaceFilterConfig:
 
 
 class FaceFilter:
+    def filter_face_with_reason(self, face_result: dict) -> dict:
+        """
+        Annotate face_result with face_rejected and reject_reason keys based on filtering.
+
+        Args:
+            face_result: Face detection result dictionary (will be modified in-place)
+
+        Returns:
+            The same dict, with 'face_rejected' (bool) and 'reject_reason' (str or None) keys set.
+        """
+        # 1. Check landmarks
+        if not self._has_valid_landmarks(face_result):
+            face_result["face_rejected"] = True
+            face_result["reject_reason"] = "invalid_landmarks"
+            return face_result
+
+        # 2. Check size
+        if not self._is_face_large_enough(face_result):
+            face_result["face_rejected"] = True
+            face_result["reject_reason"] = "face_too_small"
+            return face_result
+
+        # 3. Check zones
+        if not self._is_face_in_zones(face_result):
+            face_result["face_rejected"] = True
+            face_result["reject_reason"] = "not_in_zone"
+            return face_result
+
+        # 4. Check if frontal
+        if self.config.enable_frontal_filter and not self._is_face_frontal(face_result):
+            face_result["face_rejected"] = True
+            face_result["reject_reason"] = "not_frontal"
+            return face_result
+
+        # 5. Check if shifted
+        if self.config.enable_shift_filter and self._is_face_shifted(face_result):
+            face_result["face_rejected"] = True
+            face_result["reject_reason"] = "face_shifted"
+            return face_result
+
+        # Passed all filters
+        face_result["face_rejected"] = False
+        face_result["reject_reason"] = None
+        return face_result
+
     """
     Comprehensive face filter for validating face detection results.
 
