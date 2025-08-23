@@ -545,6 +545,88 @@ else:
 - After face detection, tracking, and confirmation, the annotation stage assigns labels and attributes before results are displayed, logged, or used for alerts.
 - This ensures that only confirmed identities are shown as known, while new or unconfirmed faces are clearly marked.
 
+# Understanding the Alerting Stage
+
+## What is Alerting?
+
+Alerting is the stage in the face recognition pipeline that triggers notifications, logs, or actions when certain face events occur—such as a known or unknown person being confirmed. It enables real-time responses to security or business events.
+
+## How Alerting Works
+
+At each frame, the system checks the status of every tracked face. When a face is confirmed (i.e., recognized as the same identity for enough frames), the system decides whether to trigger an alert based on configurable rules:
+
+- **Alert on unknown faces:** Trigger when a confirmed face has no attributes (not recognized in the database).
+- **Alert on known faces:** Trigger when a confirmed face has known attributes (recognized identity).
+- **Alert on all faces:** Trigger for any confirmed face, regardless of identity.
+
+You can choose to alert only once per face, or allow repeated alerts if the face's identity or attributes change.
+
+### Example Decision Flow
+
+For each face:
+
+1. If the face is confirmed:
+    - If alerting on unknowns and the face is unknown, trigger alert.
+    - If alerting on knowns and the face is known, trigger alert.
+    - If alerting on all, trigger alert.
+2. If the face has already triggered an alert and repeated alerts are not allowed, do not trigger again unless the face's attributes change.
+
+**Example logic:**
+
+```python
+if is_confirmed:
+    if (
+        (alert_on == "unknowns" and attributes is None and not is_alerted)
+        or (alert_on == "knowns" and attributes is not None and not is_alerted)
+        or (alert_on == "all" and not is_alerted)
+    ):
+        trigger_alert()
+        is_alerted = True
+```
+
+Alerts can be handled by downstream logic, such as sending notifications, logging, or triggering automated actions.
+
+If repeated alerts are allowed, the alert status can be reset when the face's attributes change.
+
+## Why Use Alerting?
+
+- **Real-Time Response:** Enables immediate action when important events occur (e.g., unauthorized entry).
+- **Security:** Notifies staff or systems of unknown or specific known individuals.
+- **Automation:** Integrates with external systems for automated responses (e.g., open doors, trigger alarms).
+
+## Example: Configuring and Using Alerting
+
+Suppose you want to alert only on unknown faces, and only once per face:
+
+```python
+alert_on = "unknowns"  # or "knowns", "all"
+alert_once = True
+
+for face in faces:
+    if face.is_confirmed:
+        if (
+            (alert_on == "unknowns" and face.attributes is None and not face.is_alerted)
+            or (alert_on == "knowns" and face.attributes is not None and not face.is_alerted)
+            or (alert_on == "all" and not face.is_alerted)
+        ):
+            send_alert_notification(face)
+            face.is_alerted = True
+```
+
+## Typical Use Case
+
+1. After annotation and confirmation, the alerting stage checks each face for alert conditions.
+2. If a condition is met, an alert is triggered and can be consumed by downstream logic (UI, logs, notifications).
+3. Alerts are deduplicated per face unless configured otherwise.
+
+
+## Tips and Best Practices
+
+- Choose the appropriate alerting rule for your application (e.g., only alert on unknowns for security, or on all faces for analytics).
+- Use the `alert_once` flag to control whether repeated alerts are allowed for the same face.
+- Integrate alert handling with your notification, logging, or automation systems.
+- Monitor and log alert events for auditing and tuning your alerting rules.
+
 
 ## Understanding the Recording and Storing Stage
 
