@@ -233,9 +233,9 @@ The system typically includes the following filters (see `face_filters.py`):
 - **Logic:** If the bounding box size is outside the allowed range, the detection is filtered out.
 
 ### 3. Zone Filter
-- **Purpose:** Restricts recognition to faces within a specific region of the frame (e.g., a door area).
-- **Parameters:** `zone` (polygon or rectangle coordinates).
-- **Logic:** If the face center is outside the zone, the detection is filtered out.
+- **Purpose:** Restricts recognition to faces within specific user-defined regions of the frame (zones).
+- **Parameters:** `zone_ids` (list of integer zone IDs to accept; None means all zones).
+- **Logic:** If the face is not in any of the specified zones, the detection is filtered out.
 
 ### 4. Frontal Pose Filter
 - **Purpose:** Ensures that only faces looking toward the camera are processed.
@@ -257,7 +257,7 @@ Filters are typically applied in sequence. A face must pass all filters to be ac
 filters = [
     LandmarksFilter(),
     SizeFilter(min_size=40, max_size=400),
-    ZoneFilter(zone=roi_polygon),
+    ZoneFilter(zone_ids=[0, 1]),
     FrontalPoseFilter(min_frontal_pose_score=0.7),
     CenterednessFilter(max_center_offset=0.2),
 ]
