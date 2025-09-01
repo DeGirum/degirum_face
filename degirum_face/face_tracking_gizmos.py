@@ -27,6 +27,7 @@ from degirum_tools.streams import (
 )
 
 from .reid_database import ReID_Database
+from .logging_config import logger
 
 
 @dataclass
@@ -232,7 +233,7 @@ class FaceExtractGizmo(Gizmo):
         reid_expiration_frames: int = 0,
         zone_ids: Optional[List[int]] = None,
         min_face_size: int = 0,
-        apply_landmark_heuristic_filtering: bool = True,
+        apply_landmark_heuristic_filtering: bool = False,
         stream_depth: int = 10,
         allow_drop: bool = False,
     ):
@@ -279,7 +280,10 @@ class FaceExtractGizmo(Gizmo):
 
                 landmarks = r.get("landmarks")
                 if not landmarks or len(landmarks) != 5:
+                    logger.info(f"#{i}: skipping reID: invalid landmarks")
                     continue
+
+                keypoints = [np.array(lm["landmark"]) for lm in landmarks]
 
                 # apply filtering based on the face size
                 if self._min_face_size > 0:
@@ -287,6 +291,7 @@ class FaceExtractGizmo(Gizmo):
                     if bbox is not None:
                         w, h = abs(bbox[2] - bbox[0]), abs(bbox[3] - bbox[1])
                         if min(w, h) < self._min_face_size:
+                            logger.info(f"#{i}: skipping reID: face is too small")
                             continue  # skip if the face is too small
 
                 # apply filtering based on zone IDs
@@ -296,14 +301,17 @@ class FaceExtractGizmo(Gizmo):
                         not in_zone[zid] for zid in self._zone_ids if zid < len(in_zone)
                     ):
                         # skip if the face is not in the specified zones
+                        logger.info(f"#{i}: skipping reID: not in zone")
                         continue
 
                 # apply filtering based on face landmark location
                 if self._apply_landmark_heuristic_filtering:
-                    keypoints = [np.array(lm["landmark"]) for lm in landmarks]
                     if not self.face_is_frontal(keypoints) or self.face_is_shifted(
                         r["bbox"], keypoints
                     ):
+                        logger.info(
+                            f"#{i}: skipping reID: face is not frontal or is shifted"
+                        )
                         continue  # skip if the face is not frontal or is shifted
 
                 # apply filtering based on the face reID map
@@ -335,6 +343,9 @@ class FaceExtractGizmo(Gizmo):
                     else:
                         if frame_id < face_status.next_reid_frame:
                             # skip reID if the face is already in the map and not expired
+                            logger.info(
+                                f"#{i}: skipping reID for track_id {track_id}, frame {frame_id}: reID not expired"
+                            )
                             continue
 
                         delta = min(
@@ -363,6 +374,7 @@ class FaceExtractGizmo(Gizmo):
                 new_meta = data.meta.clone()
                 new_meta.remove_last(tag_inference)
                 new_meta.append(crop_meta, self.get_tags())
+                logger.info(f"#{i}: sending cropped face, keypoints={keypoints}")
                 self.send_result(StreamData(crop_img, new_meta))
 
             # delete expired faces from the map
@@ -476,7 +488,9 @@ class FaceSearchGizmo(Gizmo):
     key_face_db_id = "face_db_id"  # face database ID
     key_face_attributes = "face_attributes"  # face attributes
     key_face_embeddings = "face_embeddings"  # face embeddings
-    key_face_similarity_score = "face_similarity_score"  # similarity score of the face embedding
+    key_face_similarity_score = (
+        "face_similarity_score"  # similarity score of the face embedding
+    )
 
     def __init__(
         self,
@@ -549,6 +563,9 @@ class FaceSearchGizmo(Gizmo):
                 },
                 self.get_tags(),
             )
+            logger.info(
+                f"Face search result: id={db_id}, attr={attributes}, score={score:.2f}"
+            )
             self.send_result(StreamData(data.data, new_meta))
 
             # update the face attributes in the map
@@ -602,6 +619,7 @@ class FaceSearchGizmo(Gizmo):
                                 and not face.is_alerted
                             )
                         ):
+                            logger.info(f"Alert triggered for track_id {track_id}")
                             self._face_reid_map.set_alert(True)
                             face.is_alerted = True
 

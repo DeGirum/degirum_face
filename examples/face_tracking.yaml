@@ -8,44 +8,59 @@
 # It includes model names, device configurations, video source, and notification settings.
 #
 
-# inference hardware location, can be "@cloud", "@local" or AI server hostname
-hw_location: "@cloud"
+# configuration for face detection model
+face_detector:
+  model_name: "yolov8n_relu6_widerface_kpts--640x640_quant_n2x_orca1_1"
+  hardware: N2X/ORCA1 # accelerator hardware to use
+  inference_host_address: "@cloud" # inference host designator
+  model_zoo_url: "degirum/public" # model zoo path
+  devices: [0] # list of device indexes to use
 
-# model zoo path, can be cloud path like "degirum/public" or local path for @local inference
-model_zoo_url: degirum/public
+# configuration for face embedding model
+face_embedder:
+  model_name: mbf_w600k--112x112_float_n2x_orca1_1
+  hardware: N2X/ORCA1 # accelerator hardware to use
+  inference_host_address: "@cloud" # inference host designator
+  model_zoo_url: "degirum/public" # model zoo path
+  devices: [0] # list of device indexes to use
 
-# model name for face keypoints detection; should detect 5 keypoints: two eyes, nose, mouth (2 points)
-face_detector_model_name: yolov8n_relu6_widerface_kpts--640x640_quant_n2x_orca1_1
+# embedding database configuration
+database:
+  db_path: "temp/face_reid_db.lance" # path to the embedding database file
+  similarity_threshold: 0.4 # cosine distance threshold for face embeddings
 
-# list of device indexes for face keypoints detection model; delete this line to use all available
-face_detector_model_devices: [0]
+# configuration for clip storage
+storage:
+  endpoint: ./temp # endpoint url, or path to local folder for local storage
+  access_key: "" # access key for S3-compatible storage
+  secret_key: "" # secret key for S3-compatible storage
+  bucket: unknown_faces # bucket name for S3-compatible storage or subdirectory name for local storage
+  url_expiration_s: 3600 # URL expiration time in seconds
 
-# model name for face reID; should detect face embeddings
-face_reid_model_name: mbf_w600k--112x112_float_n2x_orca1_1
-
-# list of device indexes for face reID model; delete this line to use all available
-face_reid_model_devices: [0]
+# configuration for face filters
+face_filters:
+  attention_zone: [[10, 10], [1000, 10], [1000, 800], [10, 800]]
+  min_face_size_percent: 50
+  enable_frontal_filter: true
+  enable_shift_filter: true
 
 # video source; can be integer number to use local camera, RTSP URL, or path to video file
-video_source: 0 
+video_source: 0
 
-# path to the ReID database directory
-db_filename: "temp/face_reid_db.lance"
+# configuration for face reID pipeline
+reid:
+  reid_expiration_frames: 10
+  credence_count: 4
 
-# number of frames to save in the video clip
-clip_duration: 100
+# configuration for alerts
+alerts:
+  alert_mode: "ON_UNKNOWNS" # "ON_KNOWNS", "ON_ALL", "NONE"
+  alert_once: true # whether to alert only once or repeatedly
+  clip_duration: 100 # duration of the video clip to save, in frames
+  notification_config: "json://console" # notification configuration string for Apprise
+  notification_message: "{time}: Unknown person detected." # notification message template
 
-# number of frames to repeat face reID
-reid_expiration_frames: 10
-
-# number of frames to consider face reID as valid
-credence_count: 4
-
-# Apprise notification config string and message template
-notification_message: '{time}: **Unknown** person detected.'
-
-# S3-compatible or local storage configuration for video clips
-endpoint: ./temp  # endpoint url, or path to local folder for local storage
-access_key: ""  # access key for S3-compatible storage
-secret_key: ""  # secret key for S3-compatible storage
-bucket: unknown_faces # bucket name for S3-compatible storage or subdirectory name for local storage
+# live stream configuration
+live_stream:
+  mode: "NONE" # "LOCAL", "WEB", "NONE"
+  rtsp_url: "face_tracking" # RTSP URL path for live stream (if mode is "WEB")

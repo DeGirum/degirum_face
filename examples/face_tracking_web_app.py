@@ -26,42 +26,20 @@ from fastapi import Request
 
 
 #
-# Setting (see `face_tracking.yaml` for detailed comments):
-#
-hw_location = "localhost"
-model_zoo_url = "degirum/public"
-face_detector_model_name = "yolov8n_relu6_widerface_kpts--640x640_quant_n2x_orca1_1"
-face_detector_model_devices = None
-face_reid_model_name = "mbf_w600k--112x112_float_n2x_orca1_1"
-face_reid_model_devices = None
-video_source = 0
-db_filename = "face_reid_db.lance"
-zone = None
-clip_duration = 100
-reid_expiration_frames = 10
-notification_config = notification_config_console
-notification_message = (
-    "{time}: Unknown person detected (saved video: [{filename}]({url})])"
-)
-credence_count = 4
-endpoint = "./"
-access_key = ""
-secret_key = ""
-bucket = "unknown_faces"
-
-
-#
 # Global variables
 #
 
 # media server instance for RTSP streaming
 media_server = MediaServer()
 
-# global variable to hold the FaceTracking instance
-face_tracker: degirum_face.FaceTracking
+# configuration of face tracking pipeline
+config: degirum_face.FaceTrackingConfig
 
 # list of pipelines running face tracking and their watchdogs
 pipelines: List[tuple] = []
+
+# face_annotator
+face_annotator: degirum_face.FaceAnnotation
 
 # URL path for RTSP streaming
 stream_url_path = "stream"
@@ -71,48 +49,17 @@ stream_url_path = "stream"
 def startup():
     """Initialize the face tracking application on startup."""
 
-    # Load YAML settings from file and update existing globals
-    try:
-        with open("face_tracking.yaml", "r") as f:
-            settings = yaml.safe_load(f)
+    # load settings from YAML file
+    global config
+    config = degirum_face.FaceTrackingConfig.from_yaml(yaml_file="face_tracking.yaml")
+    config.live_stream_mode = "WEB"
 
-        globals().update({k: v for k, v in settings.items() if k in globals()})
-    except Exception as e:
-        print(f"ERROR loading settings from YAML: {str(e)}, using default values.")
+    # start face tracking pipeline
+    pipelines.append(degirum_face.start_face_tracking_pipeline(config))
 
-    global face_tracker, pipelines
-
-    face_tracker = degirum_face.FaceTracking(
-        hw_location=hw_location,
-        model_zoo_url=model_zoo_url,
-        face_detector_model_name=face_detector_model_name,
-        face_detector_model_devices=face_detector_model_devices,
-        face_reid_model_name=face_reid_model_name,
-        face_reid_model_devices=face_reid_model_devices,
-        clip_storage_config=ObjectStorageConfig(
-            endpoint=endpoint,
-            access_key=access_key,
-            secret_key=secret_key,
-            bucket=bucket,
-        ),
-        db_filename=db_filename,
-    )
-
-    pipelines.append(
-        face_tracker.run_tracking_pipeline(
-            video_source,
-            zone=zone,
-            clip_duration=clip_duration,
-            reid_expiration_frames=reid_expiration_frames,
-            credence_count=credence_count,
-            alert_mode=degirum_face.AlertMode.ON_UNKNOWNS,
-            alert_once=True,
-            notification_config=notification_config,
-            notification_message=notification_message,
-            local_display=False,
-            stream_name=stream_url_path,
-        )
-    )
+    # create face annotator
+    global face_annotator
+    face_annotator = degirum_face.FaceAnnotation(config)
 
 
 @app.on_shutdown
@@ -163,8 +110,8 @@ def health_check():
 def main_page():
 
     face_map = degirum_face.ObjectMap()
-    clips = face_tracker.list_clips()
-    known_objects = face_tracker.db.list_objects()
+    clips = face_annotator.list_clips()
+    known_objects = config.db.list_objects()
 
     def sorted_known_objects():
         """Return known objects sorted by their attributes."""
@@ -185,7 +132,7 @@ def main_page():
         for f in selected_filenames:
             clip = clips.get(f.replace(".mp4", ""), {})
             for v in clip.values():
-                face_tracker.remove_clip(v.object_name)
+                face_annotator.remove_clip(v.object_name)
 
         refresh_clips()
 
@@ -253,29 +200,20 @@ def main_page():
             filename = selected[0]["file_name"]
             file_stem, file_ext = os.path.splitext(filename)
 
-            clip_collection = clips.get(file_stem)
-            if not clip_collection:
-                ui.notify(f"Clip {filename} not found")
-                return
-
-            clip = clip_collection.get("original")
-            if not clip:
-                ui.notify(f"Original clip {filename} not found")
-                return
-
             show_hide_ann_controls("annotation-in-progress")
-
             annotation_label.text = f"Annotating {filename}..."
 
             nonlocal face_map
             face_map = await asyncio.to_thread(
-                face_tracker.run_clip_analysis, clip, zone
+                face_annotator.run_clip_annotation, filename
             )
 
             annotation_label.text = f"{filename}: {len(face_map.map)} face(s) detected"
 
             annotated_filename = (
-                file_stem + degirum_face.FaceTracking.annotated_video_suffix + file_ext
+                file_stem
+                + degirum_face.FaceAnnotation.annotated_video_suffix
+                + file_ext
             )
             clip_url = f"/video/{annotated_filename}"
             video_player.source = clip_url
@@ -316,7 +254,7 @@ def main_page():
                 continue
 
             # add embeddings
-            face_tracker.db.add_embeddings(obj_id, face.embeddings, dedup=True)
+            config.db.add_embeddings(obj_id, face.embeddings, dedup=True)
             msg += f"{attr}: {len(face.embeddings)} embeddings\n"
 
         ui.notify("Database updated:\n" + msg, multi_line=True)
@@ -330,7 +268,7 @@ def main_page():
             else:
                 obj_id = str(uuid.uuid4())
                 known_objects[obj_id] = attr
-                face_tracker.db.add_object(obj_id, attr)
+                config.db.add_object(obj_id, attr)
                 ann_grid.options["columnDefs"][1]["cellEditorParams"] = {
                     "values": sorted_known_objects()
                 }
@@ -341,9 +279,7 @@ def main_page():
     async def db_info_dialog_open():
         """Open the dialog showing the embeddings DB info."""
 
-        counts = sorted(
-            face_tracker.db.count_embeddings().values(), key=lambda x: str(x[1])
-        )
+        counts = sorted(config.db.count_embeddings().values(), key=lambda x: str(x[1]))
         rows = [
             {
                 "attributes": str(c[1]),
@@ -360,7 +296,7 @@ def main_page():
         """Refresh the main page."""
 
         nonlocal clips
-        clips = face_tracker.list_clips()
+        clips = face_annotator.list_clips()
         clip_rows = [
             {
                 "created": clip["original"]
@@ -562,7 +498,7 @@ def stream_page():
 
     assert context.client.request
     host = context.client.request.headers.get("host", "localhost")
-    stream_url = f"http://{host.split(':')[0]}:8888/{stream_url_path}"
+    stream_url = f"http://{host.split(':')[0]}:8888/{config.live_stream_rtsp_url}"
     ui.label("Live Stream").classes("text-xl font-bold mb-4")
     ui.element("iframe").props(f'src="{stream_url}"').classes(
         "w-[90%] mx-auto h-[calc(90vh)]"
@@ -577,7 +513,7 @@ async def serve_video(request: Request, filename: str):
     filename = urllib.parse.unquote(filename)
 
     # Download full video into memory (later we can optimize this)
-    video_bytes = face_tracker.download_clip(filename)
+    video_bytes = face_annotator.download_clip(filename)
     file_size = len(video_bytes)
 
     # Extract Range header (e.g. 'bytes=0-')
