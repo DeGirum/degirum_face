@@ -15,9 +15,12 @@ from typing import Any, Dict, Iterator, Optional, Tuple, Union
 def __dir__():
     return [
         "model_registry",
+        "get_face_detection_model_spec",
+        "get_face_embedding_model_spec",
         "FaceRecognitionConfig",
         "FaceAnnotationConfig",
         "FaceTrackingConfig",
+        "FaceFilterConfig",
         "FaceRecognition",
         "FaceAnnotation",
         "start_face_tracking_pipeline",
@@ -44,11 +47,10 @@ from degirum_tools.streams import (
     VideoSaverGizmo,
     VideoSourceGizmo,
     VideoStreamerGizmo,
-    tag_inference,
     tag_video,
 )
 
-from .reid_database import ReID_Database
+from .reid_database import ReID_Database  # noqa
 
 from .face_tracking_gizmos import (
     ObjectMap,
@@ -59,14 +61,17 @@ from .face_tracking_gizmos import (
     tag_face_align,
 )
 
-from .configs import (
+from .configs import (  # noqa
     model_registry,
+    get_face_detection_model_spec,
+    get_face_embedding_model_spec,
     FaceRecognitionConfig,
     FaceAnnotationConfig,
     FaceTrackingConfig,
+    FaceFilterConfig,
 )
 
-from .logging_config import set_log_level, logging_disable, logger
+from .logging_config import set_log_level, logging_disable, logger  # noqa
 
 
 def _load_models(
@@ -82,15 +87,15 @@ def _load_models(
         Tuple[dg.model.Model, dg.model.Model]: Loaded face detection and face reID model objects.
     """
 
-    zoo = config.face_detector_model.zoo_connect()
-    face_detect_model = config.face_detector_model.load_model(zoo)
-    if config.face_reid_model.zoo_url != config.face_detector_model.zoo_url:
-        zoo = config.face_reid_model.zoo_url.zoo_connect()
-    face_reid_model = config.face_reid_model.load_model(zoo)
+    zoo = config.face_detection_model.zoo_connect()
+    face_detection_model = config.face_detection_model.load_model(zoo)
+    if config.face_embedding_model.zoo_url != config.face_detection_model.zoo_url:
+        zoo = config.face_embedding_model.zoo_url.zoo_connect()
+    face_embedding_model = config.face_embedding_model.load_model(zoo)
     logger.info(
-        f"Loaded models: {config.face_detector_model.model_name}, {config.face_reid_model.model_name}"
+        f"Loaded models: {config.face_detection_model.model_name}, {config.face_embedding_model.model_name}"
     )
-    return face_detect_model, face_reid_model
+    return face_detection_model, face_embedding_model
 
 
 class FaceRecognition:
@@ -108,11 +113,9 @@ class FaceRecognition:
         """
         assert isinstance(config, FaceRecognitionConfig)
         self.config = config
-        self.face_detect_model, self.face_reid_model = _load_models(config)
+        self.face_detection_model, self.face_embedding_model = _load_models(config)
 
-    def enroll_batch(
-        self, frames: Iterator[Any], attributes: Iterator[Any]
-    ):
+    def enroll_batch(self, frames: Iterator[Any], attributes: Iterator[Any]):
         """
         Enroll a batch of frames for face recognition.
 
@@ -122,19 +125,23 @@ class FaceRecognition:
         """
 
         config = self.config
-        reid_height = self.face_reid_model.input_shape[0][1]  # reID model input height
+        reid_height = self.face_embedding_model.input_shape[0][
+            1
+        ]  # reID model input height
 
         # frame source gizmo
         source = IteratorSourceGizmo(frames)
 
         # face detector AI gizmo
-        face_detect = AiSimpleGizmo(self.face_detect_model)
+        face_detect = AiSimpleGizmo(self.face_detection_model)
 
         # face crop gizmo (no filters)
-        face_extract = FaceExtractGizmo(target_image_size=reid_height)
+        face_extract = FaceExtractGizmo(
+            target_image_size=reid_height, filters=config.face_filter_config
+        )
 
         # face ReID AI gizmo
-        face_reid = AiSimpleGizmo(self.face_reid_model)
+        face_reid = AiSimpleGizmo(self.face_embedding_model)
 
         # face reID search gizmo
         face_search = FaceSearchGizmo(None, config.db)
@@ -196,19 +203,23 @@ class FaceRecognition:
         """
 
         config = self.config
-        reid_height = self.face_reid_model.input_shape[0][1]  # reID model input height
+        reid_height = self.face_embedding_model.input_shape[0][
+            1
+        ]  # reID model input height
 
         # frame source gizmo
         source = IteratorSourceGizmo(frames)
 
         # face detector AI gizmo
-        face_detect = AiSimpleGizmo(self.face_detect_model)
+        face_detect = AiSimpleGizmo(self.face_detection_model)
 
         # face crop gizmo (no filters)
-        face_extract = FaceExtractGizmo(target_image_size=reid_height)
+        face_extract = FaceExtractGizmo(
+            target_image_size=reid_height, filters=config.face_filter_config
+        )
 
         # face ReID AI gizmo
-        face_reid = AiSimpleGizmo(self.face_reid_model)
+        face_reid = AiSimpleGizmo(self.face_embedding_model)
 
         # face reID search gizmo
         face_search = FaceSearchGizmo(None, config.db)
@@ -361,16 +372,19 @@ class FaceAnnotation:
             )
 
             # load models
-            face_detect_model, face_reid_model = _load_models(config)
+            face_detection_model, face_embedding_model = _load_models(config)
             degirum_tools.attach_analyzers(
-                face_detect_model, _create_analyzers(config.zone, 10)
+                face_detection_model,
+                _create_analyzers(config.face_filter_config.zone, 10),
             )
-            reid_height = face_reid_model.input_shape[0][1]  # reID model input height
+            reid_height = face_embedding_model.input_shape[0][
+                1
+            ]  # reID model input height
 
             # suppress all annotations
-            face_detect_model.overlay_line_width = 0
-            face_detect_model.overlay_show_labels = True
-            face_detect_model.overlay_show_probabilities = False
+            face_detection_model.overlay_line_width = 0
+            face_detection_model.overlay_show_labels = True
+            face_detection_model.overlay_show_probabilities = False
 
             #
             # define gizmos
@@ -380,7 +394,7 @@ class FaceAnnotation:
             source = VideoSourceGizmo(input_video_local_path)
 
             # face detector AI gizmo
-            face_detect = AiSimpleGizmo(face_detect_model)
+            face_detect = AiSimpleGizmo(face_detection_model)
 
             face_map = ObjectMap()  # object map for face attributes
 
@@ -388,13 +402,11 @@ class FaceAnnotation:
             face_extract = FaceExtractGizmo(
                 target_image_size=reid_height,
                 face_reid_map=face_map,
-                reid_expiration_frames=0,
-                zone_ids=[0] if config.zone else None,
-                min_face_size=reid_height // 2,
+                filters=config.face_filter_config,
             )
 
             # face ReID AI gizmo
-            face_reid = AiSimpleGizmo(face_reid_model)
+            face_reid = AiSimpleGizmo(face_embedding_model)
 
             # face reID search gizmo
             face_search = FaceSearchGizmo(
@@ -502,14 +514,17 @@ def start_face_tracking_pipeline(
     assert isinstance(config, FaceTrackingConfig)
 
     # load models
-    face_detect_model, face_reid_model = _load_models(config)
+    face_detection_model, face_embedding_model = _load_models(config)
     degirum_tools.attach_analyzers(
-        face_detect_model,
-        _create_analyzers(config.zone, config.reid_expiration_frames + 1),
+        face_detection_model,
+        _create_analyzers(
+            config.face_filter_config.zone,
+            config.face_filter_config.reid_expiration_frames + 1,
+        ),
     )
 
-    face_detect_model.overlay_line_width = 1
-    reid_height = face_reid_model.input_shape[0][1]  # reID model input height
+    face_detection_model.overlay_line_width = 1
+    reid_height = face_embedding_model.input_shape[0][1]  # reID model input height
     face_map = ObjectMap()  # object map for face attributes
 
     #
@@ -524,7 +539,7 @@ def start_face_tracking_pipeline(
     fps_stabilizer = FPSStabilizingGizmo()
 
     # face detector AI gizmo
-    face_detect = AiSimpleGizmo(face_detect_model)
+    face_detect = AiSimpleGizmo(face_detection_model)
 
     # object annotator gizmo
     face_annotate = ObjectAnnotateGizmo(face_map)
@@ -569,13 +584,11 @@ def start_face_tracking_pipeline(
     face_extract = FaceExtractGizmo(
         target_image_size=reid_height,
         face_reid_map=face_map,
-        reid_expiration_frames=config.reid_expiration_frames,
-        zone_ids=[0] if config.zone else None,
-        min_face_size=reid_height // 2,
+        filters=config.face_filter_config,
     )
 
     # face ReID AI gizmo
-    face_reid = AiSimpleGizmo(face_reid_model)
+    face_reid = AiSimpleGizmo(face_embedding_model)
 
     # face reID search gizmo
     face_search = FaceSearchGizmo(

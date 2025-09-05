@@ -7,7 +7,6 @@
 # Implements supplemental classes and gizmos for face extraction, alignment, and re-identification (reID).
 #
 
-import cv2
 import numpy as np
 import threading
 import copy
@@ -28,6 +27,7 @@ from degirum_tools.streams import (
 
 from .reid_database import ReID_Database
 from .logging_config import logger
+from . import face_utils
 
 
 @dataclass
@@ -146,6 +146,14 @@ class ObjectAnnotateGizmo(Gizmo):
         """Get list of tags assigned to this gizmo"""
         return [self.name, tag_obj_annotate, tag_inference]
 
+    def require_tags(self, inp: int) -> List[str]:
+        """Get the list of meta tags this gizmo requires in upstream meta for a specific input.
+
+        Returns:
+            List[str]: Tags required by this gizmo in upstream meta for the specified input.
+        """
+        return [tag_inference]
+
     def __init__(
         self,
         object_map: ObjectMap,
@@ -216,6 +224,30 @@ class ObjectAnnotateGizmo(Gizmo):
             self.send_result(StreamData(data, new_meta))
 
 
+@dataclass
+class FaceFilterConfig:
+    """Configuration for face filtering"""
+
+    # small face filter: face is small when the minimum size of the smaller side of the face bbox
+    # is less than threshold in pixels
+    enable_small_face_filter: bool = False
+    min_face_size: int = 0
+
+    # zone filter: faces is out of zone when the center of the face bbox is outside specified zone polygon
+    enable_zone_filter: bool = False
+    zone: List[List[int]] = field(default_factory=list)
+
+    # frontal filter: face is frontal when nose keypoint is inside eyes-mouth rectangle
+    enable_frontal_filter: bool = False
+
+    # shift filter: face is shifted when all keypoints are grouped in one half of the image
+    enable_shift_filter: bool = False
+
+    # reid expiration filter: reid expiration based filtering
+    enable_reid_expiration_filter: bool = False
+    reid_expiration_frames: int = 10
+
+
 class FaceExtractGizmo(Gizmo):
     """Face extracting and aligning gizmo"""
 
@@ -230,10 +262,7 @@ class FaceExtractGizmo(Gizmo):
         *,
         target_image_size: int,
         face_reid_map: Optional[ObjectMap] = None,
-        reid_expiration_frames: int = 0,
-        zone_ids: Optional[List[int]] = None,
-        min_face_size: int = 0,
-        apply_landmark_heuristic_filtering: bool = False,
+        filters: FaceFilterConfig,
         stream_depth: int = 10,
         allow_drop: bool = False,
     ):
@@ -243,24 +272,26 @@ class FaceExtractGizmo(Gizmo):
         Args:
             target_image_size (int): Size to which the image should be resized.
             face_reid_map (ObjectMap): The map of face IDs to face attributes; used for filtering. None means no filtering.
-            reid_expiration_frames (int): Number of frames after which the face reID needs to be repeated.
-            zone_ids (List[int]): List of zone IDs to filter the faces. None means no filtering.
-            min_face_size (int): Minimum size of the smaller side of the face bbox in pixels to be considered for reID. 0 means no filtering.
-            apply_landmark_heuristic_filtering (bool): Whether to apply heuristic filtering based on face landmarks analysis.
+            filters (FaceFilterConfig): Configuration for face filtering.
             stream_depth (int): Depth of the stream.
             allow_drop (bool): Whether to allow dropping frames.
         """
         super().__init__([(stream_depth, allow_drop)])
         self._image_size = target_image_size
         self._face_reid_map = face_reid_map
-        self._reid_expiration_frames = reid_expiration_frames
-        self._zone_ids = zone_ids
-        self._min_face_size = min_face_size
-        self._apply_landmark_heuristic_filtering = apply_landmark_heuristic_filtering
+        self._filters = filters
 
     def get_tags(self) -> List[str]:
         """Get list of tags assigned to this gizmo"""
         return [self.name, tag_face_align, tag_crop]
+
+    def require_tags(self, inp: int) -> List[str]:
+        """Get the list of meta tags this gizmo requires in upstream meta for a specific input.
+
+        Returns:
+            List[str]: Tags required by this gizmo in upstream meta for the specified input.
+        """
+        return [tag_inference, tag_video]
 
     def run(self):
         """Run gizmo"""
@@ -286,36 +317,45 @@ class FaceExtractGizmo(Gizmo):
                 keypoints = [np.array(lm["landmark"]) for lm in landmarks]
 
                 # apply filtering based on the face size
-                if self._min_face_size > 0:
+                if (
+                    self._filters.enable_small_face_filter
+                    and self._filters.min_face_size > 0
+                ):
                     bbox = r.get("bbox")
                     if bbox is not None:
                         w, h = abs(bbox[2] - bbox[0]), abs(bbox[3] - bbox[1])
-                        if min(w, h) < self._min_face_size:
+                        if min(w, h) < self._filters.min_face_size:
                             logger.info(f"#{i}: skipping reID: face is too small")
                             continue  # skip if the face is too small
 
-                # apply filtering based on zone IDs
-                if self._zone_ids:
-                    in_zone = r.get(degirum_tools.ZoneCounter.key_in_zone)
-                    if in_zone is None or all(
-                        not in_zone[zid] for zid in self._zone_ids if zid < len(in_zone)
-                    ):
-                        # skip if the face is not in the specified zones
+                # apply filtering based on zone
+                if self._filters.enable_zone_filter:
+                    in_zone = r.get(degirum_tools.ZoneCounter.key_in_zone, False)
+                    if not in_zone:
+                        # skip if the face is not in the specified zone
                         logger.info(f"#{i}: skipping reID: not in zone")
                         continue
 
-                # apply filtering based on face landmark location
-                if self._apply_landmark_heuristic_filtering:
-                    if not self.face_is_frontal(keypoints) or self.face_is_shifted(
-                        r["bbox"], keypoints
-                    ):
-                        logger.info(
-                            f"#{i}: skipping reID: face is not frontal or is shifted"
-                        )
-                        continue  # skip if the face is not frontal or is shifted
+                # apply filtering based on face frontality
+                if (
+                    self._filters.enable_frontal_filter
+                    and not face_utils.face_is_frontal(keypoints)
+                ):
+                    logger.info(f"#{i}: skipping reID: face is not frontal")
+                    continue  # skip if the face is not frontal
+
+                # apply filtering based on face shift
+                if self._filters.enable_shift_filter and face_utils.face_is_shifted(
+                    r["bbox"], keypoints
+                ):
+                    logger.info(f"#{i}: skipping reID: face is shifted")
+                    continue  # skip if the face is shifted
 
                 # apply filtering based on the face reID map
-                if self._face_reid_map is not None:
+                if (
+                    self._face_reid_map is not None
+                    and self._filters.enable_reid_expiration_filter
+                ):
 
                     # get the track ID and skip if not available
                     track_id = r.get("track_id")
@@ -349,7 +389,7 @@ class FaceExtractGizmo(Gizmo):
                             continue
 
                         delta = min(
-                            self._reid_expiration_frames,
+                            self._filters.reid_expiration_frames,
                             2
                             * (
                                 face_status.next_reid_frame
@@ -360,7 +400,7 @@ class FaceExtractGizmo(Gizmo):
                         face_status.next_reid_frame = frame_id + delta
                     self._face_reid_map.put(track_id, face_status)
 
-                crop_img = FaceExtractGizmo.face_align_and_crop(
+                crop_img = face_utils.face_align_and_crop(
                     data.data, keypoints, self._image_size
                 )
 
@@ -378,98 +418,14 @@ class FaceExtractGizmo(Gizmo):
                 self.send_result(StreamData(crop_img, new_meta))
 
             # delete expired faces from the map
-            if self._reid_expiration_frames > 0 and self._face_reid_map is not None:
+            if (
+                self._filters.enable_reid_expiration_filter
+                and self._face_reid_map is not None
+            ):
                 self._face_reid_map.delete(
-                    lambda x: x.last_reid_frame + self._reid_expiration_frames
+                    lambda x: x.last_reid_frame + self._filters.reid_expiration_frames
                     < frame_id
                 )
-
-    @staticmethod
-    def face_is_frontal(landmarks: list) -> bool:
-        """
-        Check if the face is frontal based on the landmarks.
-        Args:
-            landmarks (List[np.ndarray]): List of 5 keypoints (landmarks) as (x, y) coordinates in the following order:
-                [left eye, right eye, nose, left mouth, right mouth].
-
-        Returns:
-            bool: True if the face is frontal, False otherwise.
-        """
-
-        assert len(landmarks) == 5
-        quad = np.array(
-            [
-                landmarks[0],  # left eye
-                landmarks[1],  # right eye
-                landmarks[4],  # right mouth
-                landmarks[3],  # left mouth
-            ],
-            dtype=np.float32,
-        )
-        nose = landmarks[2]
-        return cv2.pointPolygonTest(quad, tuple(nose), measureDist=False) > 0
-
-    @staticmethod
-    def face_is_shifted(bbox: list, landmarks: list) -> bool:
-        """
-        Check if the face is shifted based on the landmarks.
-
-        Args:
-            bbox (list): Bounding box of the face as [x1, y1, x2, y2].
-            landmarks (List[np.ndarray]): List of keypoints (landmarks) as (x, y) coordinates
-
-        Returns:
-            bool: True if the face is shifted to a side of bbox, False otherwise.
-        """
-
-        assert len(bbox) == 4
-        xc, yc = (bbox[0] + bbox[2]) * 0.5, (bbox[1] + bbox[3]) * 0.5
-
-        return (
-            all(x < xc for x, y in landmarks)
-            or all(x >= xc for x, y in landmarks)
-            or all(y < yc for x, y in landmarks)
-            or all(y >= yc for x, y in landmarks)
-        )
-
-    @staticmethod
-    def face_align_and_crop(
-        img: np.ndarray, landmarks: list, image_size: int
-    ) -> np.ndarray:
-        """
-        Align and crop the face from the image based on the given landmarks.
-
-        Args:
-            img (np.ndarray): The full image (not the cropped bounding box).
-            landmarks (List[np.ndarray]): List of 5 keypoints (landmarks) as (x, y) coordinates in the following order:
-                [left eye, right eye, nose, left mouth, right mouth].
-            image_size (int): The size to which the image should be resized.
-
-        Returns:
-            np.ndarray: the aligned face image
-        """
-
-        # reference keypoints for alignment:
-        # these are the coordinates of the 5 keypoints in the reference image (112x112);
-        # the order is: left eye, right eye, nose, left mouth, right mouth
-        _arcface_ref_kps = np.array(
-            [
-                [38.2946, 51.6963],
-                [73.5318, 51.5014],
-                [56.0252, 71.7366],
-                [41.5493, 92.3655],
-                [70.7299, 92.2041],
-            ],
-            dtype=np.float32,
-        )
-
-        assert len(landmarks) == 5
-        dst = _arcface_ref_kps * image_size / 112.0  # scale to the target size
-
-        M, _ = cv2.estimateAffinePartial2D(np.array(landmarks), dst, method=cv2.LMEDS)
-
-        aligned_img = cv2.warpAffine(img, M, [image_size, image_size])
-        return aligned_img
 
 
 class AlertMode(Enum):
@@ -528,6 +484,17 @@ class FaceSearchGizmo(Gizmo):
     def get_tags(self) -> List[str]:
         """Get list of tags assigned to this gizmo"""
         return [self.name, tag_face_search]
+
+    def require_tags(self, inp: int) -> List[str]:
+        """Get the list of meta tags this gizmo requires in upstream meta for a specific input.
+
+        Returns:
+            List[str]: Tags required by this gizmo in upstream meta for the specified input.
+        """
+        tags = [tag_inference]
+        if self._face_reid_map is not None:
+            tags.append(tag_face_align)
+        return tags
 
     def run(self):
         """Run gizmo"""

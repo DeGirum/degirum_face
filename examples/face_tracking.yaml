@@ -29,6 +29,27 @@ database:
   db_path: "temp/face_reid_db.lance" # path to the embedding database file
   similarity_threshold: 0.4 # cosine distance threshold for face embeddings
 
+# configuration for face filters
+face_filters:
+  # small face filter: face is small when the minimum size of the smaller side of the face bbox
+  # is less than threshold in pixels
+  enable_small_face_filter: true
+  min_face_size: 50
+
+  # zone filter: faces is out of zone when the center of the face bbox is outside specified zone polygon
+  enable_zone_filter: true
+  zone: [[10, 10], [1000, 10], [1000, 800], [10, 800]]
+
+  # frontal filter: face is frontal when nose keypoint is inside eyes-mouth rectangle
+  enable_frontal_filter: true
+
+  # shift filter: face is shifted when all keypoints are grouped in one half of the image
+  enable_shift_filter: true
+
+  # reID expiration filter: face reID needs to be repeated after certain number of frames
+  enable_reid_expiration_filter: true
+  reid_expiration_frames: 10
+
 # configuration for clip storage
 storage:
   endpoint: ./temp # endpoint url, or path to local folder for local storage
@@ -37,23 +58,12 @@ storage:
   bucket: unknown_faces # bucket name for S3-compatible storage or subdirectory name for local storage
   url_expiration_s: 3600 # URL expiration time in seconds
 
-# configuration for face filters
-face_filters:
-  attention_zone: [[10, 10], [1000, 10], [1000, 800], [10, 800]]
-  min_face_size_percent: 50
-  enable_frontal_filter: true
-  enable_shift_filter: true
-
 # video source; can be integer number to use local camera, RTSP URL, or path to video file
 video_source: 0
 
-# configuration for face reID pipeline
-reid:
-  reid_expiration_frames: 10
-  credence_count: 4
-
 # configuration for alerts
 alerts:
+  credence_count: 4 # number of frames to consider a face confirmed
   alert_mode: "ON_UNKNOWNS" # "ON_KNOWNS", "ON_ALL", "NONE"
   alert_once: true # whether to alert only once or repeatedly
   clip_duration: 100 # duration of the video clip to save, in frames

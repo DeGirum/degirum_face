@@ -14,7 +14,6 @@
 # - Run `face_tracking_web_app.py` example to populate the ReID database.
 #
 
-from pathlib import Path
 import sys
 import degirum_face
 
@@ -32,27 +31,31 @@ def main():
 
     # load settings from YAML file
     config = degirum_face.FaceRecognitionConfig.from_yaml(
-        yaml_file="face_tracking.yaml"
+        yaml_file="face_recognition.yaml"
     )
 
     # create FaceRecognition instance
     face_recognition = degirum_face.FaceRecognition(config)
 
+    # iterate over command line arguments
     for image_path in sys.argv[1:]:
 
         # recognize faces
         result = face_recognition.recognize_image(image_path)
 
         # display results
-        print(f"\nResults for {result.info}:")
-        for i, face in enumerate(result.results):
-            print(f"  Object #{i} ---")
-            print(f"    Face Attributes : {face['face_attributes']}, ")
-            print(f"    Similarity score: {face['face_similarity_score']:.2f}")
-            print(
-                f"    Bounding box    : [{', '.join(f'{x:.1f}' for x in face['bbox'])}]"
-            )
-            print(f"    Detection score: {face['score']:.2f}")
+        if result is None:
+            print(f"No faces found in image: {image_path}")
+        else:
+            print(f"\nResults for {result.info}:")
+            for i, face in enumerate(result.results):
+                print(f"  Object #{i} ---")
+                print(f"    Face Attributes : {face['face_attributes']}, ")
+                print(f"    Similarity score: {face['face_similarity_score']:.2f}")
+                print(
+                    f"    Bounding box    : [{', '.join(f'{x:.1f}' for x in face['bbox'])}]"
+                )
+                print(f"    Detection score: {face['score']:.2f}")
 
 
 if __name__ == "__main__":

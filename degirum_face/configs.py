@@ -13,7 +13,7 @@ import degirum_tools
 import jsonschema
 import yaml
 from .reid_database import ReID_Database
-from .face_tracking_gizmos import AlertMode
+from .face_tracking_gizmos import AlertMode, FaceFilterConfig
 
 
 # Model registry of official face tracking models
@@ -22,24 +22,80 @@ model_registry = degirum_tools.ModelRegistry(
 )
 
 
+def get_face_detection_model_spec(
+    device_type: str,
+    *,
+    inference_host_address: str = "@cloud",
+    zoo_url: Optional[str] = None,
+    token: Optional[str] = None,
+) -> degirum_tools.ModelSpec:
+    """Helper function: get face detector model specification
+
+    Args:
+        device_type (str): The type of device to use.
+        inference_host_address (str, optional): The address of the inference host.
+        zoo_url (str, optional): The URL of the model zoo.
+        token (str, optional): The access token for the model zoo.
+
+    Returns:
+        degirum_tools.ModelSpec: The model specification for the face detector.
+    """
+    return (
+        model_registry.for_hardware(device_type)
+        .for_task("face_detection")
+        .model_spec(
+            inference_host_address=inference_host_address, zoo_url=zoo_url, token=token
+        )
+    )
+
+
+def get_face_embedding_model_spec(
+    device_type: str,
+    *,
+    inference_host_address: str = "@cloud",
+    zoo_url: Optional[str] = None,
+    token: Optional[str] = None,
+) -> degirum_tools.ModelSpec:
+    """Helper function: get face embedding model specification
+
+    Args:
+        device_type (str): The type of device to use.
+        inference_host_address (str, optional): The address of the inference host.
+        zoo_url (str, optional): The URL of the model zoo.
+        token (str, optional): The access token for the model zoo.
+
+    Returns:
+        degirum_tools.ModelSpec: The model specification for the face re-identification.
+    """
+    return (
+        model_registry.for_hardware(device_type)
+        .for_task("face_embedding")
+        .model_spec(
+            inference_host_address=inference_host_address, zoo_url=zoo_url, token=token
+        )
+    )
+
+
 @dataclass
 class FaceRecognitionConfig:
     """
     Configuration for basic face recognition activities.
 
     Attributes:
-        face_detector_model (degirum_tools.ModelSpec): Face detection model specification.
-        face_reid_model (degirum_tools.ModelSpec): Face re-identification model specification.
+        face_detection_model (degirum_tools.ModelSpec): Face detection model specification.
+        face_embedding_model (degirum_tools.ModelSpec): Face embedding model specification.
         db (ReID_Database): Database for face embeddings.
+        face_filter_config (FaceFilterConfig): Configuration for face filtering.
     """
 
-    face_detector_model: degirum_tools.ModelSpec
-    face_reid_model: degirum_tools.ModelSpec
+    face_detection_model: degirum_tools.ModelSpec
+    face_embedding_model: degirum_tools.ModelSpec
     db: ReID_Database
+    face_filter_config: FaceFilterConfig
 
     # Schema keys for FaceRecognitionConfig
-    key_face_detector_model = "face_detector"
-    key_face_reid_model = "face_embedder"
+    key_face_detection_model = "face_detector"
+    key_face_embedding_model = "face_embedder"
     key_db = "database"
     key_model_name = "model_name"
     key_hardware = "hardware"
@@ -49,6 +105,15 @@ class FaceRecognitionConfig:
     key_devices = "devices"
     key_db_path = "db_path"
     key_threshold = "similarity_threshold"
+    key_face_filters = "face_filters"
+    key_enable_small_face_filter = "enable_small_face_filter"
+    key_min_face_size = "min_face_size"
+    key_enable_zone_filter = "enable_zone_filter"
+    key_zone = "zone"
+    key_enable_frontal_filter = "enable_frontal_filter"
+    key_enable_shift_filter = "enable_shift_filter"
+    key_enable_reid_expiration_filter = "enable_reid_expiration_filter"
+    key_reid_expiration_frames = "reid_expiration_frames"
 
     schema = f"""
 type: object
@@ -81,9 +146,9 @@ $defs:
             - {key_inference_host_address}
         additionalProperties: false
 properties:
-    {key_face_detector_model}:
+    {key_face_detection_model}:
         $ref: "#/$defs/model_config"
-    {key_face_reid_model}:
+    {key_face_embedding_model}:
         $ref: "#/$defs/model_config"
     {key_db}:
         type: object
@@ -98,9 +163,46 @@ properties:
         required:
             - {key_db_path}
         additionalProperties: false
+    {key_face_filters}:
+        type: object
+        properties:
+            {key_enable_small_face_filter}:
+                type: boolean
+                description: "Enable small face filter"
+            {key_min_face_size}:
+                type: number
+                minimum: 0
+                description: "Face is small when the minimum size of the smaller side of the face bbox is less than threshold in pixels"
+            {key_enable_zone_filter}:
+                type: boolean
+                description: "Enable zone filter"
+            {key_zone}:
+                type: array
+                items:
+                    type: array
+                    items:
+                        type: integer
+                    minItems: 2
+                    maxItems: 2
+                minItems: 3
+                description: "Zone coordinates as array of [x, y] points, minimum 3 points. Face is out of zone when the center of the face bbox is outside specified zone polygon"
+            {key_enable_frontal_filter}:
+                type: boolean
+                description: "Enable frontal filter. Face is frontal when nose keypoint is inside eyes-mouth rectangle"
+            {key_enable_shift_filter}:
+                type: boolean
+                description: "Enable shift filter. Face is shifted when all keypoints are grouped in one half of the image"
+            {key_enable_reid_expiration_filter}:
+                type: boolean
+                description: "Enable reID expiration filter"
+            {key_reid_expiration_frames}:
+                type: integer
+                minimum: 1
+                description: "Number of frames after which the face reID needs to be repeated"
+        additionalProperties: false
 required:
-    - {key_face_detector_model}
-    - {key_face_reid_model}
+    - {key_face_detection_model}
+    - {key_face_embedding_model}
     - {key_db}
 additionalProperties: true
     """
@@ -194,11 +296,11 @@ additionalProperties: true
                 )
             return model_spec
 
-        face_detector_model = get_model_spec(
-            settings[FaceRecognitionConfig.key_face_detector_model], "face_detection"
+        face_detection_model = get_model_spec(
+            settings[FaceRecognitionConfig.key_face_detection_model], "face_detection"
         )
-        face_reid_model = get_model_spec(
-            settings[FaceRecognitionConfig.key_face_reid_model], "face_embedding"
+        face_embedding_model = get_model_spec(
+            settings[FaceRecognitionConfig.key_face_embedding_model], "face_embedding"
         )
         dg_settings = settings[FaceRecognitionConfig.key_db]
         db = ReID_Database(
@@ -206,10 +308,38 @@ additionalProperties: true
             threshold=dg_settings.get(FaceRecognitionConfig.key_threshold, 0.3),
         )
 
+        # Extract face filter settings
+        face_filter_settings = settings.get(FaceRecognitionConfig.key_face_filters, {})
+        face_filter_config = FaceFilterConfig(
+            enable_small_face_filter=face_filter_settings.get(
+                FaceRecognitionConfig.key_enable_small_face_filter, False
+            ),
+            min_face_size=face_filter_settings.get(
+                FaceRecognitionConfig.key_min_face_size, 0
+            ),
+            enable_zone_filter=face_filter_settings.get(
+                FaceRecognitionConfig.key_enable_zone_filter, False
+            ),
+            zone=face_filter_settings.get(FaceRecognitionConfig.key_zone, []),
+            enable_frontal_filter=face_filter_settings.get(
+                FaceRecognitionConfig.key_enable_frontal_filter, False
+            ),
+            enable_shift_filter=face_filter_settings.get(
+                FaceRecognitionConfig.key_enable_shift_filter, False
+            ),
+            enable_reid_expiration_filter=face_filter_settings.get(
+                FaceRecognitionConfig.key_enable_reid_expiration_filter, False
+            ),
+            reid_expiration_frames=face_filter_settings.get(
+                FaceRecognitionConfig.key_reid_expiration_frames, 10
+            ),
+        )
+
         return FaceRecognitionConfig(
-            face_detector_model=face_detector_model,
-            face_reid_model=face_reid_model,
+            face_detection_model=face_detection_model,
+            face_embedding_model=face_embedding_model,
             db=db,
+            face_filter_config=face_filter_config,
         )
 
 
@@ -220,25 +350,12 @@ class FaceAnnotationConfig(FaceRecognitionConfig):
 
     Attributes:
         clip_storage_config (degirum_tools.ObjectStorageConfig): Storage configuration for video clips.
-        zone (list): Zone coordinates as array of [x, y] points, minimum 3 points (optional).
-        min_face_size_percent (float): Minimum allowed face size as percentage of reID model input size.
-        enable_frontal_filter (bool): Enable face frontality filter.
-        enable_shift_filter (bool): Enable face shift filter.
     """
 
     clip_storage_config: degirum_tools.ObjectStorageConfig
-    zone: Optional[list] = None
-    min_face_size_percent: float = 50.0
-    enable_frontal_filter: bool = True
-    enable_shift_filter: bool = True
 
     # Schema keys for FaceAnnotationConfig
     key_storage = "storage"
-    key_filters = "face_filters"
-    key_attention_zone = "attention_zone"
-    key_min_face_size_percent = "min_face_size_percent"
-    key_enable_frontal_filter = "enable_frontal_filter"
-    key_enable_shift_filter = "enable_shift_filter"
     key_endpoint = "endpoint"
     key_access_key = "access_key"
     key_secret_key = "secret_key"
@@ -268,34 +385,8 @@ properties:
             - {key_secret_key}
             - {key_bucket}
         additionalProperties: false
-    {key_filters}:
-        type: object
-        properties:
-            {key_attention_zone}:
-                type: array
-                items:
-                    type: array
-                    items:
-                        type: number
-                    minItems: 2
-                    maxItems: 2
-                minItems: 3
-                description: "Zone coordinates as array of [x, y] points, minimum 3 points"
-            {key_min_face_size_percent}:
-                type: number
-                minimum: 0
-                maximum: 100
-                description: "Minimum allowed face size as percentage of reID model input size"
-            {key_enable_frontal_filter}:
-                type: boolean
-                description: "Enable face frontality filter"
-            {key_enable_shift_filter}:
-                type: boolean
-                description: "Enable face shift filter"
-        additionalProperties: false
 required:
     - {key_storage}
-    - {key_filters}
 additionalProperties: true
     """
 
@@ -325,26 +416,9 @@ additionalProperties: true
             ],
         )
 
-        # Extract filter settings
-        filters_settings = settings[FaceAnnotationConfig.key_filters]
-        zone = filters_settings.get(FaceAnnotationConfig.key_attention_zone)
-        min_face_size_percent = filters_settings.get(
-            FaceAnnotationConfig.key_min_face_size_percent, 50.0
-        )
-        enable_frontal_filter = filters_settings.get(
-            FaceAnnotationConfig.key_enable_frontal_filter, True
-        )
-        enable_shift_filter = filters_settings.get(
-            FaceAnnotationConfig.key_enable_shift_filter, True
-        )
-
         return FaceAnnotationConfig(
             **vars(base_config),
             clip_storage_config=clip_storage_config,
-            zone=zone,
-            min_face_size_percent=min_face_size_percent,
-            enable_frontal_filter=enable_frontal_filter,
-            enable_shift_filter=enable_shift_filter,
         )
 
 
@@ -354,7 +428,6 @@ class FaceTrackingConfig(FaceAnnotationConfig):
     Configuration for face tracking.
 
     Attributes:
-        reid_expiration_frames (int): Number of frames after which the face reID needs to be repeated.
         credence_count (int): Number of frames to consider a face confirmed.
         alert_mode (AlertMode): Alert mode configuration.
         alert_once (bool): Whether to trigger the alert only once or each time alert condition happens.
@@ -366,7 +439,6 @@ class FaceTrackingConfig(FaceAnnotationConfig):
         live_stream_rtsp_url (str): RTSP URL path for live stream (if mode is "WEB").
     """
 
-    reid_expiration_frames: int = 10
     credence_count: int = 4
     alert_mode: AlertMode = AlertMode.NONE
     alert_once: bool = True
@@ -380,9 +452,7 @@ class FaceTrackingConfig(FaceAnnotationConfig):
     live_stream_rtsp_url: str = "face_tracking"
 
     # Schema keys for FaceTrackingConfig
-    key_reid = "reid"
     key_alerts = "alerts"
-    key_reid_expiration_frames = "reid_expiration_frames"
     key_credence_count = "credence_count"
     key_alert_mode = "alert_mode"
     key_alert_once = "alert_once"
@@ -418,21 +488,13 @@ properties:
         required:
             - {key_live_stream_mode}
         additionalProperties: false
-    {key_reid}:
+    {key_alerts}:
         type: object
         properties:
-            {key_reid_expiration_frames}:
-                type: integer
-                minimum: 1
-                description: "Number of frames after which the face reID needs to be repeated"
             {key_credence_count}:
                 type: integer
                 minimum: 1
                 description: "Number of frames to consider a face confirmed"
-        additionalProperties: false
-    {key_alerts}:
-        type: object
-        properties:
             {key_alert_mode}:
                 type: string
                 enum: ["ON_UNKNOWNS", "ON_KNOWNS", "ON_ALL", "NONE"]
@@ -456,7 +518,6 @@ properties:
 required:
     - {key_video_source}
     - {key_live_stream}
-    - {key_reid}
     - {key_alerts}
 additionalProperties: true
     """
@@ -475,15 +536,9 @@ additionalProperties: true
 
         base_config = FaceAnnotationConfig.from_settings(settings)
 
-        # Extract reid settings
-        reid_settings = settings[FaceTrackingConfig.key_reid]
-        reid_expiration_frames = reid_settings.get(
-            FaceTrackingConfig.key_reid_expiration_frames, 10
-        )
-        credence_count = reid_settings.get(FaceTrackingConfig.key_credence_count, 4)
-
         # Extract alerts settings
         alerts_settings = settings[FaceTrackingConfig.key_alerts]
+        credence_count = alerts_settings.get(FaceTrackingConfig.key_credence_count, 4)
         alert_mode_str = alerts_settings.get(
             FaceTrackingConfig.key_alert_mode, "ON_UNKNOWNS"
         )
@@ -513,7 +568,6 @@ additionalProperties: true
 
         return FaceTrackingConfig(
             **vars(base_config),
-            reid_expiration_frames=reid_expiration_frames,
             credence_count=credence_count,
             alert_mode=alert_mode,
             alert_once=alert_once,

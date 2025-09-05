@@ -1,0 +1,30 @@
+#
+# face_recognition.yaml: configuration file for face_recognition*.py examples
+#
+# Copyright DeGirum Corporation 2025
+# All rights reserved
+#
+# This file is used to set up the parameters for the face recognition pipelines.
+# It includes model names, device configurations, reID database settings, and face filter settings.
+#
+
+# configuration for face detection model
+face_detector:
+  model_name: "yolov8n_relu6_widerface_kpts--640x640_quant_n2x_orca1_1"
+  hardware: N2X/ORCA1 # accelerator hardware to use
+  inference_host_address: "@cloud" # inference host designator
+  model_zoo_url: "degirum/public" # model zoo path
+  devices: [0] # list of device indexes to use
+
+# configuration for face embedding model
+face_embedder:
+  model_name: mbf_w600k--112x112_float_n2x_orca1_1
+  hardware: N2X/ORCA1 # accelerator hardware to use
+  inference_host_address: "@cloud" # inference host designator
+  model_zoo_url: "degirum/public" # model zoo path
+  devices: [0] # list of device indexes to use
+
+# embedding database configuration
+database:
+  db_path: "temp/face_reid_db.lance" # path to the embedding database file
+  similarity_threshold: 0.4 # cosine distance threshold for face embeddings

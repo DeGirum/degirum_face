@@ -4,7 +4,7 @@
 # Copyright DeGirum Corporation 2025
 # All rights reserved
 #
-# Implements NiceGUi web application for face tracking using DeGirum's face recognition package.
+# Implements NiceGUI web application for face tracking using DeGirum's face recognition package.
 # Provides a live stream of the camera feed, allows video clip annotation, and manages face reID database.
 # You can configure all the settings in the `face_tracking.yaml` file.
 #
