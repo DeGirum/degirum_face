@@ -1,0 +1,23 @@
+#
+# face_recognition.yaml: configuration file for face_recognition*.py examples
+#
+# Copyright DeGirum Corporation 2025
+# All rights reserved
+#
+# This file is used to set up the parameters for the face recognition pipelines.
+# It includes model names, device configurations, reID database settings, and face filter settings.
+#
+
+# configuration for face detection model
+face_detector:
+  hardware: N2X/ORCA1 # accelerator hardware to use
+  inference_host_address: "@cloud" # inference host designator
+
+# configuration for face embedding model
+face_embedder:
+  hardware: N2X/ORCA1 # accelerator hardware to use
+  inference_host_address: "@cloud" # inference host designator
+
+# embedding database configuration
+database:
+  db_path: "temp/face_reid_db.lance" # path to the embedding database file

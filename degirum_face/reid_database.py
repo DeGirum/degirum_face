@@ -10,9 +10,11 @@
 
 import hashlib
 import threading
+import uuid
 import lancedb
 import numpy as np
 from typing import Any, Tuple, Dict, List, Optional
+from .logging_config import logger
 
 
 class ReID_Database:
@@ -38,10 +40,13 @@ class ReID_Database:
             db_path (str): Path to the database file.
             threshold (float): Threshold for the embedding similarity metric.
         """
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._db = lancedb.connect(db_path)
         self._tables: Dict[str, lancedb.table.Table] = {}
         self._threshold = threshold
+        logger.info(
+            f"ReID_Database initialized with db_path: {db_path}, threshold: {threshold}"
+        )
 
     def list_objects(self) -> dict:
         """
@@ -70,6 +75,7 @@ class ReID_Database:
             attributes (Any): The attributes of the object to add/change
         """
 
+        logger.info(f"Adding object {object_id} with attributes {attributes}")
         with self._lock:
             data = [
                 {
@@ -95,7 +101,7 @@ class ReID_Database:
                     # object ID does not exist, add new attributes
                     table.add(data)
 
-    def count_embeddings(self):
+    def count_embeddings(self) -> Dict[str, Tuple[int, Any]]:
         """
         Count all object embeddings in the database.
 
@@ -125,13 +131,38 @@ class ReID_Database:
             }
             return {id: (count, objects[id]) for id, count in object_counts.items()}
 
+    def get_embeddings(
+        self,
+        object_id: str,
+    ) -> List[np.ndarray]:
+        """
+        Get all embeddings for a given object ID.
+
+        Args:
+            object_id (str): The object ID.
+
+        Returns:
+            List[np.ndarray]: A list of embeddings for the object ID.
+        """
+        with self._lock:
+            table, _ = self._open_table(ReID_Database.tbl_embeddings)
+            if table is None:
+                return []
+
+            embeddings = (
+                table.search()
+                .where(f"{ReID_Database.key_object_id} == '{object_id}'")
+                .to_list()
+            )
+            return [emb[ReID_Database.key_embedding] for emb in embeddings]
+
     def add_embeddings(
         self,
         object_id: str,
         embeddings: List[np.ndarray],
         *,
         dedup: bool = True,
-    ):
+    ) -> int:
         """
         Add an embedding for given object ID to the database.
 
@@ -139,8 +170,12 @@ class ReID_Database:
             object_id (str): The object ID.
             embeddings (List[np.ndarray]): The list of embedding vectors.
             dedup (bool): Whether to deduplicate embeddings. If True, only unique embeddings will be added.
+
+        Returns:
+            int: The number of embeddings added to the database (can be smaller than the input list if dedup is enabled).
         """
 
+        logger.info(f"Adding {len(embeddings)} embedding(s) for object {object_id}")
         with self._lock:
             data = [
                 {
@@ -161,18 +196,46 @@ class ReID_Database:
                         .to_arrow()[ReID_Database.key_embedding_hash]
                         .to_pylist()
                     )
-                    data_hashes = {d[ReID_Database.key_embedding_hash] for d in data}
-                    duplicate_hashes = existing_hashes.intersection(data_hashes)
-
-                    # Remove rows from the table where the embedding hash is in duplicate_hashes
-                    if duplicate_hashes:
-                        hashes_str = "', '".join(duplicate_hashes)
-                        table.delete(
-                            where=f"{ReID_Database.key_embedding_hash} IN ('{hashes_str}')"
-                        )
+                    # Filter out items from data that have duplicate hashes
+                    data = [
+                        d
+                        for d in data
+                        if d[ReID_Database.key_embedding_hash] not in existing_hashes
+                    ]
 
                 if data:
                     table.add(data)
+
+            return len(data)
+
+    def add_embeddings_for_attributes(
+        self,
+        attributes: Any,
+        embeddings: List[np.ndarray],
+        *,
+        dedup: bool = True,
+    ) -> Tuple[int, str]:
+        """
+        Add embeddings for a specific person's attributes.
+
+        Args:
+            attributes (Any): The attributes of the object. If no object ID is found, a new one will be created.
+            embeddings (List[np.ndarray]): The list of embedding vectors.
+            dedup (bool): Whether to deduplicate embeddings. If True, only unique embeddings will be added.
+
+        Returns:
+            tuple: The tuple containing the number of embeddings added and the corresponding object ID.
+        """
+        with self._lock:
+            obj_id = self.get_id_by_attributes(attributes)
+            if obj_id is None:
+                # add the person to the database
+                obj_id = str(uuid.uuid4())
+                self.add_object(obj_id, attributes)
+
+            # add embeddings to the database
+            cnt = self.add_embeddings(obj_id, embeddings, dedup=dedup)
+            return cnt, obj_id
 
     def get_id_by_attributes(self, attributes: Any) -> Optional[str]:
         """
@@ -280,6 +343,26 @@ class ReID_Database:
                     attributes = attribute_result[0][ReID_Database.key_attributes]
 
             return object_id, attributes, score
+
+    def clear_all_tables(self) -> None:
+        """
+        Clear all data from both embeddings and attributes tables by dropping them.
+        This will delete all object embeddings and attributes from the database.
+        """
+        with self._lock:
+            # Drop embeddings table
+            if self.tbl_embeddings in self._db.table_names():
+                self._db.drop_table(self.tbl_embeddings)
+                logger.info(f"Dropped {self.tbl_embeddings} table")
+
+            # Drop attributes table
+            if self.tbl_attributes in self._db.table_names():
+                self._db.drop_table(self.tbl_attributes)
+                logger.info(f"Dropped {self.tbl_attributes} table")
+
+            # Clear the internal table cache
+            self._tables.clear()
+            logger.info("All database tables dropped and cache cleared successfully")
 
     def _open_table(
         self, table_name, data: Optional[list] = None

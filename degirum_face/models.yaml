@@ -1,0 +1,82 @@
+#
+# models.yaml - Face detection model registry
+#
+# Copyright DeGirum Corporation 2025
+# All rights reserved
+#
+# This registry lists all available DeGirum-hosted models for face recognition
+#
+
+models:
+  # Hailo8 models
+  yolov8n_relu6_widerface_kpts--640x640_quant_hailort_hailo8_1:
+    description: "YOLOv8 nano face detection with keypoints for Hailo-8"
+    task: "face_detection"
+    hardware: ["HAILORT/HAILO8"]
+    zoo_url: "degirum/hailo"
+
+  arcface_mobilefacenet--112x112_quant_hailort_hailo8_1:
+    description: "ArcFace MobileFaceNet for face recognition on Hailo-8"
+    task: "face_embedding"
+    hardware: ["HAILORT/HAILO8"]
+    zoo_url: "degirum/hailo"
+
+  # Hailo8L models
+  yolov8n_relu6_widerface_kpts--640x640_quant_hailort_hailo8l_1:
+    description: "YOLOv8 nano face detection with keypoints for Hailo-8L"
+    task: "face_detection"
+    hardware: ["HAILORT/HAILO8L"]
+    zoo_url: "degirum/hailo"
+
+  arcface_mobilefacenet--112x112_quant_hailort_hailo8l_1:
+    description: "ArcFace MobileFaceNet for face recognition on Hailo-8L"
+    task: "face_embedding"
+    hardware: ["HAILORT/HAILO8L"]
+    zoo_url: "degirum/hailo"
+
+  # DeepX models
+  yolov8n_relu6_widerface_kpts--640x640_quant_deepx_m1a_1:
+    description: "YOLOv8 nano face detection with keypoints for DeepX"
+    task: "face_detection"
+    hardware: ["DEEPX/M1A"]
+    zoo_url: "degirum/deepx"
+
+  # Axelera Metis models
+  yolov8n_relu6_widerface_kpts--640x640_quant_axelera_metis_1:
+    description: "YOLOv8 nano face detection with keypoints for Axelera Metis"
+    task: "face_detection"
+    hardware: ["AXELERA/METIS"]
+    zoo_url: "degirum/axelera"
+
+  arcface_mobilefacenet--112x112_quant_axelera_metis_1:
+    description: "ArcFace MobileFaceNet for face recognition on Axelera Metis"
+    task: "face_embedding"
+    hardware: ["AXELERA/METIS"]
+    zoo_url: "degirum/axelera"
+
+  # Google Coral models
+  yolov8n_relu6_widerface_kpts--640x640_quant_tflite_edgetpu_1:
+    description: "YOLOv8 nano face detection with keypoints for Google Coral TPU"
+    task: "face_detection"
+    hardware: ["TFLITE/EDGETPU"]
+    zoo_url: "degirum/google"
+
+  # DeGirum Orca models
+  yolov8n_relu6_widerface_kpts--640x640_quant_n2x_orca1_1:
+    description: "YOLOv8 nano face detection with keypoints for DeGirum Orca"
+    task: "face_detection"
+    hardware: ["N2X/ORCA1"]
+    zoo_url: "degirum/degirum"
+
+  arcface_mobilefacenet--112x112_quant_n2x_orca1_1:
+    description: "ArcFace MobileFaceNet for face recognition on DeGirum Orca"
+    task: "face_embedding"
+    hardware: ["N2X/ORCA1"]
+    zoo_url: "degirum/degirum"
+
+  # Rockchip RK3588 models
+  yolov8n_relu6_widerface_kpts--640x640_quant_rknn_rk3588_1:
+    description: "YOLOv8 nano face detection with keypoints for RK3588 NPU"
+    task: "face_detection"
+    hardware: ["RKNN/RK3588"]
+    zoo_url: "degirum/rockchip"
