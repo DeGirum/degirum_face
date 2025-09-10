@@ -8,10 +8,9 @@
 #
 
 import numpy as np
-import threading
 import copy
-from typing import List, Dict, Any, Optional, ClassVar
-from dataclasses import dataclass, asdict, field
+from typing import List, Optional
+from dataclasses import dataclass, field
 from enum import Enum
 
 import degirum_tools
@@ -27,112 +26,8 @@ from degirum_tools.streams import (
 
 from .reid_database import ReID_Database
 from .logging_config import logger
-from . import face_utils
-
-
-@dataclass
-class FaceStatus:
-    """
-    Class to hold detected face runtime status.
-    """
-
-    attributes: Optional[Any]  # face attributes
-    db_id: Optional[str] = None  # database ID
-    track_id: int = 0  # face track ID
-    last_reid_frame: int = -1  # last frame number on which reID was performed
-    next_reid_frame: int = -1  # next frame number on which reID should be performed
-    confirmed_count: int = 0  # number of times the face was confirmed
-    is_confirmed: bool = False  # whether the face status is confirmed
-    is_alerted: bool = False  # whether the alert was triggered for this face
-    embeddings: list = field(default_factory=list)  # list of embeddings for the face
-
-    # default labels
-    lbl_not_tracked: ClassVar[str] = "not tracked"
-    lbl_identifying: ClassVar[str] = "identifying"
-    lbl_confirming: ClassVar[str] = "confirming"
-    lbl_unknown: ClassVar[str] = "UNKNOWN"
-
-    def __str__(self):
-        return (
-            str(self.attributes)
-            if self.attributes is not None
-            else FaceStatus.lbl_unknown
-        )
-
-    def to_dict(self):
-        return asdict(self)
-
-
-class ObjectMap:
-    """Thread-safe map of object IDs to object attributes."""
-
-    def __init__(self):
-        """
-        Constructor.
-        """
-
-        self._lock = threading.Lock()
-        self.map: Dict[int, Any] = {}
-        self.alert = False  # flag to indicate if an alert was triggered
-
-    def set_alert(self, alert: bool = True) -> None:
-        """
-        Set the alert flag.
-
-        Args:
-            alert (bool): True to set the alert, False to reset it.
-        """
-        with self._lock:
-            self.alert = alert
-
-    def read_alert(self) -> bool:
-        """
-        Read the alert flag and reset it.
-
-        Returns:
-            bool: True if an alert was triggered, False otherwise.
-        """
-        with self._lock:
-            alert = self.alert
-            self.alert = False
-            return alert
-
-    def put(self, id: int, value: Any) -> None:
-        """
-        Add/update an object in the map
-
-        Args:
-            id (int): Object ID
-            value (Any): Object attributes reference
-        """
-        with self._lock:
-            self.map[id] = value
-
-    def get(self, id: int) -> Optional[Any]:
-        """
-        Get the object by ID
-
-        Args:
-            id (int): The ID of the tracked face.
-
-        Returns:
-            Optional[Any]: The deep copy of object attributes or None if not found.
-        """
-        with self._lock:
-            return copy.deepcopy(self.map.get(id))
-
-    def delete(self, expr):
-        """
-        Delete objects from the map
-
-        Args:
-            expr (lambda): logical expression to filter objects to delete
-        """
-        with self._lock:
-            keys_to_delete = [key for key, value in self.map.items() if expr(value)]
-            for key in keys_to_delete:
-                del self.map[key]
-
+from .face_utils import face_is_frontal, face_is_shifted, face_align_and_crop
+from .face_data import FaceStatus, ObjectMap
 
 tag_obj_annotate = "object_annotate"  # tag for object annotation meta
 tag_face_align = "face_align"  # tag for face alignment and cropping meta
@@ -307,11 +202,21 @@ class FaceExtractGizmo(Gizmo):
                     f"{self.__class__.__name__}: inference meta not found: you need to have face detection gizmo in upstream"
                 )
 
+            # get current frame ID
+            video_meta = data.meta.find_last(tag_video)
+            if video_meta is None:
+                raise Exception(
+                    f"{self.__class__.__name__}: video meta not found: you need to have {VideoSourceGizmo.__class__.__name__} in upstream"
+                )
+            frame_id = video_meta[VideoSourceGizmo.key_frame_id]
+
             for i, r in enumerate(result.results):
 
                 landmarks = r.get("landmarks")
                 if not landmarks or len(landmarks) != 5:
-                    logger.info(f"#{i}: skipping reID: invalid landmarks")
+                    logger.info(
+                        f"#{i}, frame {frame_id}: skipping reID: invalid landmarks"
+                    )
                     continue
 
                 keypoints = [np.array(lm["landmark"]) for lm in landmarks]
@@ -325,30 +230,55 @@ class FaceExtractGizmo(Gizmo):
                     if bbox is not None:
                         w, h = abs(bbox[2] - bbox[0]), abs(bbox[3] - bbox[1])
                         if min(w, h) < self._filters.min_face_size:
-                            logger.info(f"#{i}: skipping reID: face is too small")
+                            logger.info(
+                                f"#{i}, frame {frame_id}: skipping reID: face is too small"
+                            )
                             continue  # skip if the face is too small
+
+                track_id = r.get("track_id")
+                face_status = (
+                    self._face_reid_map.get(track_id)
+                    if self._face_reid_map and track_id is not None
+                    else None
+                )
+
+                def delay_next_reid():
+                    if face_status is not None and self._face_reid_map is not None:
+                        # delay next reID attempt to avoid premature object deletion from face map
+                        face_status.next_reid_frame = max(
+                            face_status.next_reid_frame, frame_id + 1
+                        )
+                        self._face_reid_map.put(track_id, face_status)
 
                 # apply filtering based on zone
                 if self._filters.enable_zone_filter:
-                    in_zone = r.get(degirum_tools.ZoneCounter.key_in_zone, False)
-                    if not in_zone:
+                    in_zone = r.get(degirum_tools.ZoneCounter.key_in_zone, [])
+                    if not any(in_zone):
                         # skip if the face is not in the specified zone
-                        logger.info(f"#{i}: skipping reID: not in zone")
+                        logger.info(
+                            f"#{i}, frame {frame_id}: skipping reID: not in zone"
+                        )
+                        delay_next_reid()
                         continue
 
                 # apply filtering based on face frontality
-                if (
-                    self._filters.enable_frontal_filter
-                    and not face_utils.face_is_frontal(keypoints)
+                if self._filters.enable_frontal_filter and not face_is_frontal(
+                    keypoints
                 ):
-                    logger.info(f"#{i}: skipping reID: face is not frontal")
+                    logger.info(
+                        f"#{i}, frame {frame_id}: skipping reID: face is not frontal"
+                    )
+                    delay_next_reid()
                     continue  # skip if the face is not frontal
 
                 # apply filtering based on face shift
-                if self._filters.enable_shift_filter and face_utils.face_is_shifted(
+                if self._filters.enable_shift_filter and face_is_shifted(
                     r["bbox"], keypoints
                 ):
-                    logger.info(f"#{i}: skipping reID: face is shifted")
+                    logger.info(
+                        f"#{i}, frame {frame_id}: skipping reID: face is shifted"
+                    )
+                    delay_next_reid()
                     continue  # skip if the face is shifted
 
                 # apply filtering based on the face reID map
@@ -358,20 +288,10 @@ class FaceExtractGizmo(Gizmo):
                 ):
 
                     # get the track ID and skip if not available
-                    track_id = r.get("track_id")
                     if track_id is None:
                         # no track ID - skip reID
                         continue
 
-                    # get current frame ID
-                    video_meta = data.meta.find_last(tag_video)
-                    if video_meta is None:
-                        raise Exception(
-                            f"{self.__class__.__name__}: video meta not found: you need to have {VideoSourceGizmo.__class__.__name__} in upstream"
-                        )
-                    frame_id = video_meta[VideoSourceGizmo.key_frame_id]
-
-                    face_status = self._face_reid_map.get(track_id)
                     if face_status is None:
                         # new face
                         face_status = FaceStatus(
@@ -384,7 +304,7 @@ class FaceExtractGizmo(Gizmo):
                         if frame_id < face_status.next_reid_frame:
                             # skip reID if the face is already in the map and not expired
                             logger.info(
-                                f"#{i}: skipping reID for track_id {track_id}, frame {frame_id}: reID not expired"
+                                f"#{i}, frame {frame_id}: skipping reID for track_id {track_id}: reID not expired"
                             )
                             continue
 
@@ -400,9 +320,7 @@ class FaceExtractGizmo(Gizmo):
                         face_status.next_reid_frame = frame_id + delta
                     self._face_reid_map.put(track_id, face_status)
 
-                crop_img = face_utils.face_align_and_crop(
-                    data.data, keypoints, self._image_size
-                )
+                crop_img = face_align_and_crop(data.data, keypoints, self._image_size)
 
                 crop_obj = copy.deepcopy(r)
                 crop_meta = {
@@ -414,7 +332,9 @@ class FaceExtractGizmo(Gizmo):
                 new_meta = data.meta.clone()
                 new_meta.remove_last(tag_inference)
                 new_meta.append(crop_meta, self.get_tags())
-                logger.info(f"#{i}: sending cropped face, keypoints={keypoints}")
+                logger.info(
+                    f"#{i}, frame {frame_id}: sending cropped face, keypoints={[k.astype(int).tolist() for k in keypoints]}"
+                )
                 self.send_result(StreamData(crop_img, new_meta))
 
             # delete expired faces from the map
@@ -422,10 +342,11 @@ class FaceExtractGizmo(Gizmo):
                 self._filters.enable_reid_expiration_filter
                 and self._face_reid_map is not None
             ):
-                self._face_reid_map.delete(
-                    lambda x: x.last_reid_frame + self._filters.reid_expiration_frames
-                    < frame_id
+                deleted = self._face_reid_map.delete(
+                    lambda x: x.next_reid_frame < frame_id
                 )
+                if deleted:
+                    logger.info(f"frame {frame_id}: objects {deleted.keys()} deleted")
 
 
 class AlertMode(Enum):

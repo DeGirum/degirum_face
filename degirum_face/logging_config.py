@@ -54,7 +54,7 @@ def configure_logging(
 
     # Set format
     if format_str is None:
-        format_str = "[%(asctime)s] %(name)s.%(funcName)s:%(lineno)d - %(levelname)s - %(message)s"
+        format_str = "[%(asctime)s] %(module)s.%(funcName)s:%(lineno)d - %(levelname)s - %(message)s"
 
     formatter = logging.Formatter(format_str)
     handler.setFormatter(formatter)

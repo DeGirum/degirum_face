@@ -9,7 +9,10 @@ import os
 import tempfile
 import degirum as dg
 import degirum_tools
-from typing import Any, Dict, Iterator, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from pathlib import Path
+
+import numpy as np
 
 
 def __dir__():
@@ -17,11 +20,13 @@ def __dir__():
         "model_registry",
         "get_face_detection_model_spec",
         "get_face_embedding_model_spec",
+        "AlertMode",
         "FaceRecognitionConfig",
         "FaceAnnotationConfig",
         "FaceTrackingConfig",
         "FaceFilterConfig",
         "FaceRecognition",
+        "FaceRecognitionResult",
         "FaceAnnotation",
         "start_face_tracking_pipeline",
         "ObjectMap",
@@ -52,8 +57,9 @@ from degirum_tools.streams import (
 
 from .reid_database import ReID_Database  # noqa
 
-from .face_tracking_gizmos import (
+from .face_tracking_gizmos import (  # noqa
     ObjectMap,
+    AlertMode,
     FaceSearchGizmo,
     FaceExtractGizmo,
     ObjectAnnotateGizmo,
@@ -71,7 +77,14 @@ from .configs import (  # noqa
     FaceFilterConfig,
 )
 
-from .logging_config import set_log_level, logging_disable, logger  # noqa
+from .face_data import FaceRecognitionResult  # noqa
+
+from .logging_config import (  # noqa
+    configure_logging,
+    set_log_level,
+    logging_disable,
+    logger,
+)
 
 
 def _load_models(
@@ -90,7 +103,7 @@ def _load_models(
     zoo = config.face_detection_model.zoo_connect()
     face_detection_model = config.face_detection_model.load_model(zoo)
     if config.face_embedding_model.zoo_url != config.face_detection_model.zoo_url:
-        zoo = config.face_embedding_model.zoo_url.zoo_connect()
+        zoo = config.face_embedding_model.zoo_connect()
     face_embedding_model = config.face_embedding_model.load_model(zoo)
     logger.info(
         f"Loaded models: {config.face_detection_model.model_name}, {config.face_embedding_model.model_name}"
@@ -115,19 +128,21 @@ class FaceRecognition:
         self.config = config
         self.face_detection_model, self.face_embedding_model = _load_models(config)
 
-    def enroll_batch(self, frames: Iterator[Any], attributes: Iterator[Any]):
+    def enroll_batch(self, frames: Iterable, attributes: Iterable) -> List[np.ndarray]:
         """
         Enroll a batch of frames for face recognition.
 
         Args:
-            frames (Iterator[Any]): An iterator yielding frames as numpy arrays or file paths
-            attributes (Iterator[Any]): An iterator yielding attributes for each frame
+            frames (Iterable): An iterator yielding frames as numpy arrays or file paths
+            attributes (Iterable): An iterator yielding attributes for each frame
+
+        Returns:
+            list: A list of face embeddings for each enrolled face.
         """
 
         config = self.config
-        reid_height = self.face_embedding_model.input_shape[0][
-            1
-        ]  # reID model input height
+        # reID model input height
+        reid_height = self.face_embedding_model.input_shape[0][1]
 
         # frame source gizmo
         source = IteratorSourceGizmo(frames)
@@ -149,6 +164,9 @@ class FaceRecognition:
         # sink gizmo to collect results
         sink = SinkGizmo()
 
+        attributes_iter = iter(attributes)
+
+        ret = []
         with Composition(
             source >> face_detect >> face_extract >> face_reid >> face_search >> sink
         ):
@@ -157,7 +175,7 @@ class FaceRecognition:
                 search_meta = r.meta.find_last(tag_face_search)
                 crop_meta = r.meta.find_last(tag_face_align)
                 if crop_meta[FaceExtractGizmo.key_cropped_index] == 0:
-                    attr = next(attributes)
+                    attr = next(attributes_iter)
                     max_bbox_area = -1
 
                 bbox = crop_meta[FaceExtractGizmo.key_cropped_result]["bbox"]
@@ -171,19 +189,25 @@ class FaceRecognition:
                         attr, [embeddings]
                     )
                     logger.info(f"Enrolled: {attr}, {cnt} embeddings, id={obj_id}")
+                    ret.append(embeddings)
 
-    def enroll_image(self, frame: Any, attributes: Any):
+        return ret
+
+    def enroll_image(self, frame: Any, attributes: Any) -> np.ndarray:
         """
         Enroll a single image for face recognition.
 
         Args:
             frame (Any): The input image frame as a numpy array or file path.
             attributes (Any): The attributes for the image (e.g., person name).
+
+        Returns:
+            np.ndarray: The face embedding for the enrolled image.
         """
-        self.enroll_batch(iter((frame,)), iter((attributes,)))
+        return self.enroll_batch(iter((frame,)), iter((attributes,)))[0]
 
     def recognize_batch(
-        self, frames: Iterator[Any]
+        self, frames: Iterable
     ) -> Iterator[dg.postprocessor.InferenceResults]:
         """
         Recognize faces in a batch of frames.
@@ -247,12 +271,13 @@ class FaceRecognition:
                 ret._inference_results[idx]["face_db_id"] = search_meta[
                     FaceSearchGizmo.key_face_db_id
                 ]
-                ret._inference_results[idx]["face_attributes"] = search_meta[
-                    FaceSearchGizmo.key_face_attributes
-                ]
+                attributes = search_meta[FaceSearchGizmo.key_face_attributes]
+                ret._inference_results[idx]["face_attributes"] = attributes
                 ret._inference_results[idx]["face_similarity_score"] = search_meta[
                     FaceSearchGizmo.key_face_similarity_score
                 ]
+                if attributes is not None:
+                    ret._inference_results[idx]["label"] = attributes
 
                 if crop_meta[FaceExtractGizmo.key_is_last_crop]:
                     yield ret
@@ -337,27 +362,34 @@ class FaceAnnotation:
         assert isinstance(config, FaceAnnotationConfig)
         self.config = config
         self.storage = degirum_tools.ObjectStorage(config.clip_storage_config)
+        self.config.face_filter_config.enable_reid_expiration_filter = True
+        self.config.face_filter_config.reid_expiration_frames = 1
 
     def run_clip_annotation(
-        self, clip_object_name: str, save_annotated: bool = True
+        self,
+        clip_object_name: str,
+        *,
+        save_annotated: bool = True,
+        compute_clusters: bool = True,
     ) -> ObjectMap:
         """
-        Run the face analysis and annotation pipeline on a video clip.
+        Run the face analysis and annotation pipeline on a video clip object.
 
         Args:
             clip_object_name (str): The video clip file object name in object storage.
             save_annotated (bool): Whether to save the annotated video clip to the object storage.
+            compute_clusters (bool): Whether to compute K-means clustering on the embeddings.
 
         Returns:
             ObjectMap: The map of face IDs to face objects found in the clip. Each face object includes a table of embeddings.
         """
 
-        config = self.config
         with tempfile.TemporaryDirectory() as tmpdir:
 
             # define the storage and paths
-            storage = degirum_tools.ObjectStorage(config.clip_storage_config)
+            storage = degirum_tools.ObjectStorage(self.config.clip_storage_config)
             storage.ensure_bucket_exists()
+            clip_object_name = self._patch_filename(clip_object_name)
             dirname = os.path.dirname(clip_object_name)
             filename = os.path.basename(clip_object_name)
             file_stem, file_ext = os.path.splitext(filename)
@@ -371,75 +403,108 @@ class FaceAnnotation:
                 clip_object_name, input_video_local_path
             )
 
-            # load models
-            face_detection_model, face_embedding_model = _load_models(config)
-            degirum_tools.attach_analyzers(
-                face_detection_model,
-                _create_analyzers(config.face_filter_config.zone, 10),
+            ret = self.run_clip_annotation_from_file(
+                input_video_local_path,
+                save_annotated=save_annotated,
+                output_video_path=output_video_local_path,
+                compute_clusters=compute_clusters,
             )
-            reid_height = face_embedding_model.input_shape[0][
-                1
-            ]  # reID model input height
-
-            # suppress all annotations
-            face_detection_model.overlay_line_width = 0
-            face_detection_model.overlay_show_labels = True
-            face_detection_model.overlay_show_probabilities = False
-
-            #
-            # define gizmos
-            #
-
-            # video source gizmo
-            source = VideoSourceGizmo(input_video_local_path)
-
-            # face detector AI gizmo
-            face_detect = AiSimpleGizmo(face_detection_model)
-
-            face_map = ObjectMap()  # object map for face attributes
-
-            # face crop gizmo
-            face_extract = FaceExtractGizmo(
-                target_image_size=reid_height,
-                face_reid_map=face_map,
-                filters=config.face_filter_config,
-            )
-
-            # face ReID AI gizmo
-            face_reid = AiSimpleGizmo(face_embedding_model)
-
-            # face reID search gizmo
-            face_search = FaceSearchGizmo(
-                face_map, config.db, credence_count=1, accumulate_embeddings=True
-            )
-
-            # object annotator gizmo
-            face_annotate = ObjectAnnotateGizmo(face_map)
-
-            if save_annotated:
-                # annotated video saved gizmo
-                saver = VideoSaverGizmo(output_video_local_path, show_ai_overlay=True)
-                saver.connect_to(face_annotate)
-
-            #
-            # define pipeline and run it
-            #
-            Composition(
-                source >> face_detect >> face_extract >> face_reid >> face_search,
-                face_detect >> face_annotate,
-            ).start()
 
             # upload the annotated video to the object storage
             if save_annotated:
                 storage.upload_file_to_object_storage(
                     output_video_local_path, out_object_name
                 )
+            return ret
 
-            # compute K-means clustering on the embeddings
+    def run_clip_annotation_from_file(
+        self,
+        file_path: str,
+        *,
+        save_annotated: bool = True,
+        output_video_path: Optional[str] = None,
+        compute_clusters: bool = True,
+    ) -> ObjectMap:
+        """
+        Run the face analysis and annotation pipeline on a video clip local file.
+
+        Args:
+            file_name (str): The video clip file path
+            save_annotated (bool): Whether to save the annotated video clip to a file.
+            output_video_path (str): The file path to save the annotated video clip into.
+            compute_clusters (bool): Whether to compute K-means clustering on the embeddings.
+
+        Returns:
+            ObjectMap: The map of face IDs to face objects found in the clip. Each face object includes a table of embeddings.
+        """
+
+        config = self.config
+
+        # load models
+        face_detection_model, face_embedding_model = _load_models(config)
+        degirum_tools.attach_analyzers(
+            face_detection_model,
+            _create_analyzers(config.face_filter_config.zone, 10),
+        )
+        reid_height = face_embedding_model.input_shape[0][1]  # reID model input height
+
+        # suppress all annotations
+        face_detection_model.overlay_line_width = 0
+        face_detection_model.overlay_show_labels = True
+        face_detection_model.overlay_show_probabilities = False
+
+        #
+        # define gizmos
+        #
+
+        # video source gizmo
+        source = VideoSourceGizmo(file_path)
+
+        # face detector AI gizmo
+        face_detect = AiSimpleGizmo(face_detection_model)
+
+        face_map = ObjectMap()  # object map for face attributes
+
+        # face crop gizmo
+        face_extract = FaceExtractGizmo(
+            target_image_size=reid_height,
+            face_reid_map=face_map,
+            filters=config.face_filter_config,
+        )
+
+        # this needs to be enabled to save embeddings
+        face_extract._filters.enable_reid_expiration_filter = True
+
+        # face ReID AI gizmo
+        face_reid = AiSimpleGizmo(face_embedding_model)
+
+        # face reID search gizmo
+        face_search = FaceSearchGizmo(
+            face_map, config.db, credence_count=1, accumulate_embeddings=True
+        )
+
+        # object annotator gizmo
+        face_annotate = ObjectAnnotateGizmo(face_map)
+
+        if save_annotated and output_video_path:
+            # annotated video saved gizmo
+            saver = VideoSaverGizmo(output_video_path, show_ai_overlay=True)
+            saver.connect_to(face_annotate)
+
+        #
+        # define pipeline and run it
+        #
+        Composition(
+            source >> face_detect >> face_extract >> face_reid >> face_search,
+            face_detect >> face_annotate,
+        ).start()
+
+        # compute K-means clustering on the embeddings
+        if compute_clusters:
             for id, face in face_map.map.items():
                 face.embeddings = degirum_tools.compute_kmeans(face.embeddings)
 
-            return face_map
+        return face_map
 
     def list_clips(self) -> Dict[str, dict]:
         """
@@ -482,6 +547,7 @@ class FaceAnnotation:
             bytes: The bytes of the downloaded video clip.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
+            filename = self._patch_filename(filename)
             local_path = os.path.join(tmpdir, filename)
             self.storage.download_file_from_object_storage(filename, local_path)
             return open(local_path, "rb").read()
@@ -493,7 +559,23 @@ class FaceAnnotation:
         Args:
             filename (str): The name of the video clip to remove.
         """
-        self.storage.delete_file_from_object_storage(filename)
+        self.storage.delete_file_from_object_storage(self._patch_filename(filename))
+
+    def remove_all_clips(self):
+        """
+        Remove all video clips from the storage.
+        """
+        for clip in self.list_clips().values():
+            for v in clip.values():
+                self.remove_clip(v.object_name)
+
+    @staticmethod
+    def _patch_filename(filename) -> str:
+        """
+        Patch the filename to ensure it has the correct .mp4 extension if it is missing
+        """
+        path = Path(filename)
+        return str(path if path.suffix else path.with_suffix(".mp4"))
 
 
 def start_face_tracking_pipeline(
@@ -532,7 +614,9 @@ def start_face_tracking_pipeline(
     #
 
     # video source gizmo
-    source = VideoSourceGizmo(config.video_source, retry_on_error=True)
+    source = VideoSourceGizmo(
+        config.video_source, retry_on_error=not os.path.isfile(config.video_source)
+    )
     _, _, fps = source.get_video_properties()
 
     # gizmo to keep FPS (to deal with camera disconnects)

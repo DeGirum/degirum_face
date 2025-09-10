@@ -27,7 +27,9 @@ import degirum_face
 
 def main():
     # load settings from YAML file
-    config = degirum_face.FaceAnnotationConfig.from_yaml(yaml_file="face_tracking.yaml")
+    config, _ = degirum_face.FaceAnnotationConfig.from_yaml(
+        yaml_file="face_tracking.yaml"
+    )
 
     # create FaceAnnotation instance
     annotator = degirum_face.FaceAnnotation(config)
@@ -35,8 +37,7 @@ def main():
     # check command line arguments
     if len(sys.argv) != 3:
         print("Usage: python face_tracking_add_embeddings.py <clip_name> <person_name>")
-        print("Example: python face_tracking_add_embeddings.py 0000123 'John Doe'")
-        print("Available video clips in storage:")
+        print("\nAvailable video clips in storage:")
         for clip_info in annotator.list_clips().values():
             if "original" in clip_info:
                 print(f"  {clip_info['original'].object_name}")

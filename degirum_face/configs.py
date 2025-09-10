@@ -5,7 +5,7 @@
 # Contains dataclass configurations for face recognition, annotation, and tracking
 #
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import inspect
 from pathlib import Path
 from typing import Optional, Union
@@ -43,7 +43,7 @@ def get_face_detection_model_spec(
     return (
         model_registry.for_hardware(device_type)
         .for_task("face_detection")
-        .model_spec(
+        .top_model_spec(
             inference_host_address=inference_host_address, zoo_url=zoo_url, token=token
         )
     )
@@ -70,7 +70,7 @@ def get_face_embedding_model_spec(
     return (
         model_registry.for_hardware(device_type)
         .for_task("face_embedding")
-        .model_spec(
+        .top_model_spec(
             inference_host_address=inference_host_address, zoo_url=zoo_url, token=token
         )
     )
@@ -91,7 +91,7 @@ class FaceRecognitionConfig:
     face_detection_model: degirum_tools.ModelSpec
     face_embedding_model: degirum_tools.ModelSpec
     db: ReID_Database
-    face_filter_config: FaceFilterConfig
+    face_filter_config: FaceFilterConfig = field(default_factory=FaceFilterConfig)
 
     # Schema keys for FaceRecognitionConfig
     key_face_detection_model = "face_detector"
@@ -210,7 +210,7 @@ additionalProperties: true
     @classmethod
     def from_yaml(
         cls, *, yaml_file: Union[str, Path, None] = None, yaml_str: Optional[str] = None
-    ):
+    ) -> tuple:
         """
         Create configuration class instance from YAML configuration.
 
@@ -219,7 +219,7 @@ additionalProperties: true
             yaml_str (Optional[str]): YAML configuration as a string.
 
         Returns:
-            Config object created from YAML.
+            tuple: (Config object created from YAML, loaded settings dictionary)
         """
 
         if yaml_file:
@@ -243,7 +243,7 @@ additionalProperties: true
         else:
             raise ValueError("Either yaml_file or yaml_str must be provided")
 
-        return cls.from_settings(settings)
+        return cls.from_settings(settings), settings
 
     @staticmethod
     def from_settings(settings: dict) -> "FaceRecognitionConfig":
@@ -261,33 +261,29 @@ additionalProperties: true
         def get_model_spec(model_settings, task):
             model_name = model_settings.get(FaceRecognitionConfig.key_model_name)
             hw = model_settings.get(FaceRecognitionConfig.key_hardware)
+            devices_selected = model_settings.get(FaceRecognitionConfig.key_devices)
+            model_properties = (
+                dict(devices_selected=devices_selected) if devices_selected else None
+            )
 
             if model_name:
                 model_spec = degirum_tools.ModelSpec(
                     model_name=model_name,
                     zoo_url=model_settings.get(FaceRecognitionConfig.key_zoo_url),
                     token=model_settings.get(FaceRecognitionConfig.key_token),
-                    load_kwargs=dict(
-                        devices_selected=model_settings.get(
-                            FaceRecognitionConfig.key_devices
-                        )
-                    ),
+                    model_properties=model_properties,
                 )
             elif hw:
                 model_spec = (
                     model_registry.for_task(task)
                     .for_hardware(hw)
-                    .model_spec(
+                    .top_model_spec(
                         inference_host_address=model_settings[
                             FaceRecognitionConfig.key_inference_host_address
                         ],
                         zoo_url=model_settings.get(FaceRecognitionConfig.key_zoo_url),
                         token=model_settings.get(FaceRecognitionConfig.key_token),
-                        load_kwargs=dict(
-                            devices_selected=model_settings.get(
-                                FaceRecognitionConfig.key_devices
-                            )
-                        ),
+                        model_properties=model_properties,
                     )
                 )
             else:
@@ -305,7 +301,7 @@ additionalProperties: true
         dg_settings = settings[FaceRecognitionConfig.key_db]
         db = ReID_Database(
             db_path=dg_settings.get(FaceRecognitionConfig.key_db_path),
-            threshold=dg_settings.get(FaceRecognitionConfig.key_threshold, 0.3),
+            threshold=dg_settings.get(FaceRecognitionConfig.key_threshold, 0.4),
         )
 
         # Extract face filter settings
@@ -352,7 +348,11 @@ class FaceAnnotationConfig(FaceRecognitionConfig):
         clip_storage_config (degirum_tools.ObjectStorageConfig): Storage configuration for video clips.
     """
 
-    clip_storage_config: degirum_tools.ObjectStorageConfig
+    clip_storage_config: degirum_tools.ObjectStorageConfig = field(
+        default_factory=lambda: degirum_tools.ObjectStorageConfig(
+            endpoint="./", access_key="", secret_key="", bucket="face_clips"
+        )
+    )
 
     # Schema keys for FaceAnnotationConfig
     key_storage = "storage"

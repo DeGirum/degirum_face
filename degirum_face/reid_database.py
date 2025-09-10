@@ -131,6 +131,31 @@ class ReID_Database:
             }
             return {id: (count, objects[id]) for id, count in object_counts.items()}
 
+    def get_embeddings(
+        self,
+        object_id: str,
+    ) -> List[np.ndarray]:
+        """
+        Get all embeddings for a given object ID.
+
+        Args:
+            object_id (str): The object ID.
+
+        Returns:
+            List[np.ndarray]: A list of embeddings for the object ID.
+        """
+        with self._lock:
+            table, _ = self._open_table(ReID_Database.tbl_embeddings)
+            if table is None:
+                return []
+
+            embeddings = (
+                table.search()
+                .where(f"{ReID_Database.key_object_id} == '{object_id}'")
+                .to_list()
+            )
+            return [emb[ReID_Database.key_embedding] for emb in embeddings]
+
     def add_embeddings(
         self,
         object_id: str,
@@ -318,6 +343,26 @@ class ReID_Database:
                     attributes = attribute_result[0][ReID_Database.key_attributes]
 
             return object_id, attributes, score
+
+    def clear_all_tables(self) -> None:
+        """
+        Clear all data from both embeddings and attributes tables by dropping them.
+        This will delete all object embeddings and attributes from the database.
+        """
+        with self._lock:
+            # Drop embeddings table
+            if self.tbl_embeddings in self._db.table_names():
+                self._db.drop_table(self.tbl_embeddings)
+                logger.info(f"Dropped {self.tbl_embeddings} table")
+
+            # Drop attributes table
+            if self.tbl_attributes in self._db.table_names():
+                self._db.drop_table(self.tbl_attributes)
+                logger.info(f"Dropped {self.tbl_attributes} table")
+
+            # Clear the internal table cache
+            self._tables.clear()
+            logger.info("All database tables dropped and cache cleared successfully")
 
     def _open_table(
         self, table_name, data: Optional[list] = None

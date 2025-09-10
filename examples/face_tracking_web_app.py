@@ -51,7 +51,9 @@ def startup():
 
     # load settings from YAML file
     global config
-    config = degirum_face.FaceTrackingConfig.from_yaml(yaml_file="face_tracking.yaml")
+    config, _ = degirum_face.FaceTrackingConfig.from_yaml(
+        yaml_file="face_tracking.yaml"
+    )
     config.live_stream_mode = "WEB"
 
     # start face tracking pipeline

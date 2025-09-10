@@ -28,7 +28,9 @@ import degirum_face
 def main():
 
     # load settings from YAML file
-    config = degirum_face.FaceTrackingConfig.from_yaml(yaml_file="face_tracking.yaml")
+    config, _ = degirum_face.FaceTrackingConfig.from_yaml(
+        yaml_file="face_tracking.yaml"
+    )
 
     # set live stream mode to local window
     config.live_stream_mode = "LOCAL"
