@@ -616,7 +616,8 @@ def start_face_tracking_pipeline(
     # video source gizmo
     source = VideoSourceGizmo(
         config.video_source,
-        retry_on_error=config.video_source.startswith("rtsp://"),
+        retry_on_error=isinstance(config.video_source, str)
+        and config.video_source.startswith("rtsp://"),
     )
     _, _, fps = source.get_video_properties()
 

@@ -12,7 +12,7 @@ setup(
     version=__version__,  # noqa
     description="DeGirum Face Recognition Package",
     author="DeGirum Corp",
-    license="MIT",
+    license="DeGirum PySDK End-User License Agreement (https://docs.degirum.com/pysdk/eula)",
     author_email="support@degirum.com",
     url="https://github.com/DeGirum/degirum_face",
     classifiers=[
