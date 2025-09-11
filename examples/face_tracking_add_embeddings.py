@@ -21,8 +21,7 @@
 #
 
 
-import sys
-import degirum_face
+import degirum_face, sys, os
 
 
 def main():
@@ -36,7 +35,7 @@ def main():
 
     # check command line arguments
     if len(sys.argv) != 3:
-        print("Usage: python face_tracking_add_embeddings.py <clip_name> <person_name>")
+        print(f"Usage: python {os.path.basename(__file__)} <clip_name> <person_name>")
         print("\nAvailable video clips in storage:")
         for clip_info in annotator.list_clips().values():
             if "original" in clip_info:

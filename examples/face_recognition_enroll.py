@@ -13,8 +13,7 @@
 # - Install DeGirum Face SDK: `pip install degirum-face`
 #
 
-import sys
-import degirum_face
+import degirum_face, sys, os
 
 
 def main():
@@ -33,7 +32,7 @@ def main():
 
     elif len(sys.argv) < 3 or len(sys.argv) % 2 != 1:
         print(
-            "Usage: python face_recognition_enroll.py <image_path1> <person_name1> [image_path2] [person_name2] ...\n"
+            f"Usage: python {os.path.basename(__file__)} <image_path1> <person_name1> [image_path2] [person_name2] ...\n"
             "To clear the database, run: python face_recognition_enroll.py clear"
         )
         print("Current number of embeddings in the database: ")
