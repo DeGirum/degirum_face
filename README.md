@@ -25,3 +25,5 @@ Then open browser and navigate to http://localhost:8080
 |face_tracking_web_app.py| Full-featured web application for real time intruder detection with NVR capabilities and notifications. Has GUI for adding known faces to face database based on captured video clips of unknown faces. |
 |face_tracking_simple.py| Subset of `face_tracking_web_app.py`, which does real time intruder detection part displaying live preview in local window. Requires known face database to be filled by `face_tracking_web_app.py` or `face_tracking_add_embeddings.py` |
 |face_tracking_add_embeddings.py| Subset of `face_tracking_web_app.py`, which adds known faces to face database based on captured video clips of unknown faces. Requires such video clips to be captured by either `face_tracking_web_app.py` or `face_tracking_simple.py` |
+|find_similar_faces.py| Example how to find all photos with similar faces to a given input image. |
+|group_similar_faces.py| Example how to find groups of photos featuring similar faces. |
