@@ -52,6 +52,7 @@ from degirum_tools.streams import (
     VideoSaverGizmo,
     VideoSourceGizmo,
     VideoStreamerGizmo,
+    tag_inference,
     tag_video,
 )
 
@@ -259,12 +260,14 @@ class FaceRecognition:
                 search_meta = r.meta.find_last(tag_face_search)
                 crop_meta = r.meta.find_last(tag_face_align)
                 video_meta = r.meta.find_last(tag_video)
+                inference_meta = r.meta.find_last(tag_inference)
 
                 if not ret:
                     ret = crop_meta[FaceExtractGizmo.key_original_result]
                     ret._frame_info = video_meta[IteratorSourceGizmo.key_file_path]
 
                 idx = crop_meta[FaceExtractGizmo.key_cropped_index]
+                ret._inference_results[idx]["reid_model_result"] = inference_meta
                 ret._inference_results[idx]["face_embeddings"] = search_meta[
                     FaceSearchGizmo.key_face_embeddings
                 ]
