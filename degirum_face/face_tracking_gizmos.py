@@ -436,7 +436,7 @@ class FaceSearchGizmo(Gizmo):
                 )
 
             # search the database for the face embedding
-            embedding = result.results[0].get("data").ravel()
+            embedding = np.array(result.results[0]["data"]).ravel()
             embedding /= np.linalg.norm(embedding)
             db_id, attributes, score = self._db.get_attributes_by_embedding(embedding)
 

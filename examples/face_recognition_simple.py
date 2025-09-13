@@ -14,15 +14,14 @@
 # - Run `face_recognition_enroll.py` example to populate the ReID database.
 #
 
-import sys
-import degirum_face
+import degirum_face, sys, os
 
 
 def main():
     # Check if any image paths were provided
     if len(sys.argv) < 2:
         print(
-            "Usage: python face_recognition_simple.py <image_path1> [image_path2] [image_path3] ..."
+            f"Usage: python {os.path.basename(__file__)} <image_path1> [image_path2] [image_path3] ..."
         )
         sys.exit(1)
 
