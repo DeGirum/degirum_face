@@ -659,6 +659,7 @@ def start_face_tracking_pipeline(
         clip_target_fps=fps,
         storage_config=config.clip_storage_config,
         show_overlay=False,
+        notification_timeout_s=config.notification_timeout_s,
     )
 
     # gizmo to execute a chain of analyzers which count unknown faces and generate events and alerts

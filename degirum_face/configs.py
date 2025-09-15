@@ -434,6 +434,7 @@ class FaceTrackingConfig(FaceAnnotationConfig):
         clip_duration (int): Duration of the clip in frames for saving clips.
         notification_config (str): Apprise configuration string for notifications.
         notification_message (str): Message template for notifications.
+        notification_timeout_s (float): Timeout in seconds for sending notifications.
         video_source: Video source; can be integer number to use local camera, RTSP URL, or path to video file.
         live_stream_mode (str): Live stream mode: "LOCAL", "WEB", or "NONE".
         live_stream_rtsp_url (str): RTSP URL path for live stream (if mode is "WEB").
@@ -447,6 +448,7 @@ class FaceTrackingConfig(FaceAnnotationConfig):
     notification_message: str = (
         "{time}: Unknown person detected. Saved video: [{filename}]({url})"
     )
+    notification_timeout_s: Optional[float] = None
     video_source: Union[int, str] = 0
     live_stream_mode: str = "LOCAL"
     live_stream_rtsp_url: str = "face_tracking"
@@ -459,6 +461,7 @@ class FaceTrackingConfig(FaceAnnotationConfig):
     key_clip_duration = "clip_duration"
     key_notification_config = "notification_config"
     key_notification_message = "notification_message"
+    key_notification_timeout_s = "notification_timeout_s"
     key_video_source = "video_source"
     key_live_stream = "live_stream"
     key_live_stream_mode = "mode"
@@ -512,6 +515,9 @@ properties:
             {key_notification_message}:
                 type: string
                 description: "Message template for notifications"
+            {key_notification_timeout_s}:
+                type: number
+                description: "Timeout in seconds for sending notifications, if not defined, default timeout is applied"
         required:
             - {key_alert_mode}
         additionalProperties: false
@@ -553,6 +559,9 @@ additionalProperties: true
             FaceTrackingConfig.key_notification_message,
             "{time}: Unknown person detected. Saved video: [{filename}]({url})",
         )
+        notification_timeout_s = alerts_settings.get(
+            FaceTrackingConfig.key_notification_timeout_s
+        )
 
         # Extract video_source
         video_source = settings.get(FaceTrackingConfig.key_video_source, 0)
@@ -574,6 +583,7 @@ additionalProperties: true
             clip_duration=clip_duration,
             notification_config=notification_config,
             notification_message=notification_message,
+            notification_timeout_s=notification_timeout_s,
             video_source=video_source,
             live_stream_mode=live_stream_mode,
             live_stream_rtsp_url=live_stream_rtsp_url,
