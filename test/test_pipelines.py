@@ -108,12 +108,12 @@ def create_face_tracking_setup(temp_dir, assets_dir):
         live_stream_mode="NONE",
     )
 
-    # Create FaceAnnotation instance
-    face_annotation = degirum_face.FaceAnnotation(face_tracking_config)
+    # Create clip manager instance
+    clip_manager = degirum_face.FaceClipManager(face_tracking_config)
 
     return {
         "face_tracking_config": face_tracking_config,
-        "face_annotation": face_annotation,
+        "clip_manager": clip_manager,
         "db": db,
     }
 
@@ -230,15 +230,15 @@ def test_face_tracking_pipeline_execution(temp_dir, assets_dir):
     # Test Step 1: Run face tracking pipeline and collect clips
     #
     setup = create_face_tracking_setup(temp_dir, assets_dir)
-    face_annotation = setup["face_annotation"]
+    clip_manager = setup["clip_manager"]
     face_tracking_config = setup["face_tracking_config"]
     db = setup["db"]
 
     # Clear any existing clips
-    face_annotation.remove_all_clips()
+    clip_manager.remove_all_clips()
 
     # Verify no clips exist initially
-    initial_clips = face_annotation.list_clips()
+    initial_clips = clip_manager.list_clips()
     assert len(initial_clips) == 0, "Clips should be empty after removal"
 
     # Run the face tracking pipeline
@@ -246,7 +246,7 @@ def test_face_tracking_pipeline_execution(temp_dir, assets_dir):
     composition.wait()
 
     # Check if clips were generated
-    clips = face_annotation.list_clips()
+    clips = clip_manager.list_clips()
     assert len(clips) == 1, "Clips should be generated after pipeline run"
 
     #
@@ -257,16 +257,16 @@ def test_face_tracking_pipeline_execution(temp_dir, assets_dir):
     first_clip = next(iter(clips))
 
     # Download original clip
-    clip_data = face_annotation.download_clip(first_clip + ".mp4")
+    clip_data = clip_manager.download_clip(first_clip + ".mp4")
     assert clip_data is not None and len(clip_data) > 0
 
     # Annotate clip
-    face_map = face_annotation.run_clip_annotation(first_clip)
+    face_map = clip_manager.find_faces_in_clip(first_clip)
     assert len(face_map.map) == 2, "Expected two tracked objects in face map"
 
     # Download annotated clip
-    annotated_clip = face_annotation.download_clip(
-        first_clip + face_annotation.annotated_video_suffix
+    annotated_clip = clip_manager.download_clip(
+        first_clip + clip_manager.annotated_video_suffix
     )
     assert annotated_clip is not None and len(annotated_clip) > 0
 
@@ -293,14 +293,14 @@ def test_face_tracking_pipeline_execution(temp_dir, assets_dir):
     #
 
     # Clear clips before second run
-    face_annotation.remove_all_clips()
+    clip_manager.remove_all_clips()
 
     # Run pipeline again
     composition, _ = degirum_face.start_face_tracking_pipeline(face_tracking_config)
     composition.wait()
 
     # Check for clips (should be fewer or none if recognition is working)
-    clips_after_enrollment = face_annotation.list_clips()
+    clips_after_enrollment = clip_manager.list_clips()
     assert (
         len(clips_after_enrollment) == 0
     ), "No clips should be generated after enrollment"

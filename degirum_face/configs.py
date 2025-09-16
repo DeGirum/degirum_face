@@ -340,9 +340,9 @@ additionalProperties: true
 
 
 @dataclass
-class FaceAnnotationConfig(FaceRecognitionConfig):
+class FaceClipManagerConfig(FaceRecognitionConfig):
     """
-    Configuration for face annotation.
+    Configuration for face clip management.
 
     Attributes:
         clip_storage_config (degirum_tools.ObjectStorageConfig): Storage configuration for video clips.
@@ -354,7 +354,7 @@ class FaceAnnotationConfig(FaceRecognitionConfig):
         )
     )
 
-    # Schema keys for FaceAnnotationConfig
+    # Schema keys for FaceClipManagerConfig
     key_storage = "storage"
     key_endpoint = "endpoint"
     key_access_key = "access_key"
@@ -391,39 +391,39 @@ additionalProperties: true
     """
 
     @staticmethod
-    def from_settings(settings: dict) -> "FaceAnnotationConfig":
+    def from_settings(settings: dict) -> "FaceClipManagerConfig":
         """
-        Create FaceAnnotationConfig from settings dictionary.
+        Create FaceClipManagerConfig from settings dictionary.
         Args:
             settings (dict): Configuration settings as loaded from YAML.
 
         """
 
         jsonschema.validate(
-            instance=settings, schema=yaml.safe_load(FaceAnnotationConfig.schema)
+            instance=settings, schema=yaml.safe_load(FaceClipManagerConfig.schema)
         )
 
         base_config = FaceRecognitionConfig.from_settings(settings)
 
-        storage_settings = settings[FaceAnnotationConfig.key_storage]
+        storage_settings = settings[FaceClipManagerConfig.key_storage]
         clip_storage_config = degirum_tools.ObjectStorageConfig(
-            endpoint=storage_settings[FaceAnnotationConfig.key_endpoint],
-            access_key=storage_settings[FaceAnnotationConfig.key_access_key],
-            secret_key=storage_settings[FaceAnnotationConfig.key_secret_key],
-            bucket=storage_settings[FaceAnnotationConfig.key_bucket],
+            endpoint=storage_settings[FaceClipManagerConfig.key_endpoint],
+            access_key=storage_settings[FaceClipManagerConfig.key_access_key],
+            secret_key=storage_settings[FaceClipManagerConfig.key_secret_key],
+            bucket=storage_settings[FaceClipManagerConfig.key_bucket],
             url_expiration_s=storage_settings[
-                FaceAnnotationConfig.key_url_expiration_s
+                FaceClipManagerConfig.key_url_expiration_s
             ],
         )
 
-        return FaceAnnotationConfig(
+        return FaceClipManagerConfig(
             **vars(base_config),
             clip_storage_config=clip_storage_config,
         )
 
 
 @dataclass
-class FaceTrackingConfig(FaceAnnotationConfig):
+class FaceTrackingConfig(FaceClipManagerConfig):
     """
     Configuration for face tracking.
 
@@ -540,7 +540,7 @@ additionalProperties: true
             instance=settings, schema=yaml.safe_load(FaceTrackingConfig.schema)
         )
 
-        base_config = FaceAnnotationConfig.from_settings(settings)
+        base_config = FaceClipManagerConfig.from_settings(settings)
 
         # Extract alerts settings
         alerts_settings = settings[FaceTrackingConfig.key_alerts]

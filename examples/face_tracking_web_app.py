@@ -38,8 +38,8 @@ config: degirum_face.FaceTrackingConfig
 # list of pipelines running face tracking and their watchdogs
 pipelines: List[tuple] = []
 
-# face_annotator
-face_annotator: degirum_face.FaceAnnotation
+# clip manager instance for annotating video clips
+clip_manager: degirum_face.FaceClipManager
 
 # URL path for RTSP streaming
 stream_url_path = "stream"
@@ -59,9 +59,9 @@ def startup():
     # start face tracking pipeline
     pipelines.append(degirum_face.start_face_tracking_pipeline(config))
 
-    # create face annotator
-    global face_annotator
-    face_annotator = degirum_face.FaceAnnotation(config)
+    # create clip manager
+    global clip_manager
+    clip_manager = degirum_face.FaceClipManager(config)
 
 
 @app.on_shutdown
@@ -112,7 +112,7 @@ def health_check():
 def main_page():
 
     face_map = degirum_face.ObjectMap()
-    clips = face_annotator.list_clips()
+    clips = clip_manager.list_clips()
     known_objects = config.db.list_objects()
 
     def sorted_known_objects():
@@ -134,7 +134,7 @@ def main_page():
         for f in selected_filenames:
             clip = clips.get(f.replace(".mp4", ""), {})
             for v in clip.values():
-                face_annotator.remove_clip(v.object_name)
+                clip_manager.remove_clip(v.object_name)
 
         refresh_clips()
 
@@ -207,14 +207,14 @@ def main_page():
 
             nonlocal face_map
             face_map = await asyncio.to_thread(
-                face_annotator.run_clip_annotation, filename
+                clip_manager.find_faces_in_clip, filename
             )
 
             annotation_label.text = f"{filename}: {len(face_map.map)} face(s) detected"
 
             annotated_filename = (
                 file_stem
-                + degirum_face.FaceAnnotation.annotated_video_suffix
+                + degirum_face.FaceClipManager.annotated_video_suffix
                 + file_ext
             )
             clip_url = f"/video/{annotated_filename}"
@@ -298,7 +298,7 @@ def main_page():
         """Refresh the main page."""
 
         nonlocal clips
-        clips = face_annotator.list_clips()
+        clips = clip_manager.list_clips()
         clip_rows = [
             {
                 "created": clip["original"]
@@ -515,7 +515,7 @@ async def serve_video(request: Request, filename: str):
     filename = urllib.parse.unquote(filename)
 
     # Download full video into memory (later we can optimize this)
-    video_bytes = face_annotator.download_clip(filename)
+    video_bytes = clip_manager.download_clip(filename)
     file_size = len(video_bytes)
 
     # Extract Range header (e.g. 'bytes=0-')

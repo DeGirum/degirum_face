@@ -13,7 +13,7 @@ import yaml
 import degirum_tools
 from degirum_face.configs import (
     FaceRecognitionConfig,
-    FaceAnnotationConfig,
+    FaceClipManagerConfig,
     FaceTrackingConfig,
 )
 from degirum_face.reid_database import ReID_Database
@@ -247,7 +247,7 @@ face_filters:
 
 
 def test_config_face_annotation():
-    """Test FaceAnnotationConfig class functionality"""
+    """Test FaceClipManagerConfig class functionality"""
 
     # Test 1: Basic instantiation with required parameters
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -277,7 +277,7 @@ def test_config_face_annotation():
         )
 
         # Test basic instantiation
-        config = FaceAnnotationConfig(
+        config = FaceClipManagerConfig(
             face_detection_model=face_detection_model,
             face_embedding_model=face_embedding_model,
             db=db,
@@ -289,7 +289,7 @@ def test_config_face_annotation():
         assert config.face_embedding_model == face_embedding_model
         assert config.db == db
 
-        # Verify FaceAnnotationConfig specific attributes
+        # Verify FaceClipManagerConfig specific attributes
         assert config.clip_storage_config == clip_storage_config
         assert config.clip_storage_config.endpoint == "http://localhost:9000"
         assert config.clip_storage_config.access_key == "testkey"
@@ -301,7 +301,7 @@ def test_config_face_annotation():
         db_path = os.path.join(temp_dir, "test_db2.lance")
         db = ReID_Database(db_path=db_path)
 
-        config = FaceAnnotationConfig(
+        config = FaceClipManagerConfig(
             face_detection_model=face_detection_model,
             face_embedding_model=face_embedding_model,
             db=db,
@@ -339,7 +339,7 @@ def test_config_face_annotation():
             },
         }
 
-        config = FaceAnnotationConfig.from_settings(settings)
+        config = FaceClipManagerConfig.from_settings(settings)
 
         # Verify inherited functionality works
         assert config.face_detection_model.model_name == "test_detector"
@@ -379,7 +379,7 @@ def test_config_face_annotation():
             },
         }
 
-        config = FaceAnnotationConfig.from_settings(settings)
+        config = FaceClipManagerConfig.from_settings(settings)
 
         # Verify storage configuration with expiration
         assert config.clip_storage_config.endpoint == "./local_storage"
@@ -408,7 +408,7 @@ storage:
   url_expiration_s: 7200
         """
 
-        config, loaded_settings = FaceAnnotationConfig.from_yaml(yaml_str=yaml_str)
+        config, loaded_settings = FaceClipManagerConfig.from_yaml(yaml_str=yaml_str)
 
         # Verify basic functionality inherited from FaceRecognitionConfig
         assert config.db._threshold == 0.7
@@ -443,7 +443,7 @@ storage:
         }
 
         with pytest.raises(Exception):
-            FaceAnnotationConfig.from_settings(invalid_settings)
+            FaceClipManagerConfig.from_settings(invalid_settings)
 
     # Incomplete storage configuration
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -469,7 +469,7 @@ storage:
         }
 
         with pytest.raises(Exception):
-            FaceAnnotationConfig.from_settings(invalid_settings)
+            FaceClipManagerConfig.from_settings(invalid_settings)
 
 
 def test_config_face_tracking():

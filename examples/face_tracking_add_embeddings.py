@@ -26,18 +26,18 @@ import degirum_face, sys, os
 
 def main():
     # load settings from YAML file
-    config, _ = degirum_face.FaceAnnotationConfig.from_yaml(
+    config, _ = degirum_face.FaceClipManagerConfig.from_yaml(
         yaml_file="face_tracking.yaml"
     )
 
-    # create FaceAnnotation instance
-    annotator = degirum_face.FaceAnnotation(config)
+    # create clip manager instance
+    clip_manager = degirum_face.FaceClipManager(config)
 
     # check command line arguments
     if len(sys.argv) != 3:
         print(f"Usage: python {os.path.basename(__file__)} <clip_name> <person_name>")
         print("\nAvailable video clips in storage:")
-        for clip_info in annotator.list_clips().values():
+        for clip_info in clip_manager.list_clips().values():
             if "original" in clip_info:
                 print(f"  {clip_info['original'].object_name}")
         print("Person names currently in database:")
@@ -50,7 +50,7 @@ def main():
 
     # run analysis pipeline on the video file
     print(f"Processing video file: {video_file}")
-    face_map = annotator.run_clip_annotation(video_file, save_annotated=False)
+    face_map = clip_manager.find_faces_in_clip(video_file, save_annotated=False)
 
     if len(face_map.map) != 1:
         print(
