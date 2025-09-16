@@ -15,24 +15,25 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
-
       - name: Check out repository code
         uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.9
+          python-version: 3.12
 
       - name: Run linters and build package
         run: |
           python3 -m pip install .[build]
-          echo "-----------------------------Running linters...------------------------------"
+          echo "-----------------------------Running linters------------------------------"
           python3 -m flake8
           python3 -m mypy
-          echo "-----------------------------Running build...--------------------------------"
+          echo "-----------------------------Running tests--------------------------------"
+          python3 -m pytest -s -v
+          echo "-----------------------------Running build--------------------------------"
           python3 -m build .
 
       - name: Extract package version and create git tag
