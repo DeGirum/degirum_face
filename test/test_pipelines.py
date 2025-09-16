@@ -6,7 +6,6 @@
 # Tests both face recognition and face tracking functionality end-to-end
 #
 
-import pdb
 import pytest, os
 import degirum, degirum_face, degirum_tools
 

@@ -8,7 +8,6 @@
 
 import pytest
 import numpy as np
-import cv2
 from degirum_face.face_utils import (
     face_align_and_crop,
     face_is_frontal,
@@ -64,7 +63,7 @@ def test_face_utils():
         [65, 75],  # right mouth
     ]
 
-    assert face_is_frontal(frontal_landmarks) == True
+    assert face_is_frontal(frontal_landmarks)
 
     # Test case: profile/side face (nose outside the eye-mouth quadrilateral)
     profile_landmarks = [
@@ -75,7 +74,7 @@ def test_face_utils():
         [65, 75],  # right mouth
     ]
 
-    assert face_is_frontal(profile_landmarks) == False
+    assert face_is_frontal(profile_landmarks) is False
 
     # Test case: another profile orientation
     profile_landmarks2 = [
@@ -86,7 +85,7 @@ def test_face_utils():
         [65, 75],  # right mouth
     ]
 
-    assert face_is_frontal(profile_landmarks2) == False
+    assert face_is_frontal(profile_landmarks2) is False
 
     # Test assertion error for wrong number of landmarks
     with pytest.raises(AssertionError):
@@ -106,7 +105,7 @@ def test_face_utils():
         [60, 75],  # right-bottom
     ]
 
-    assert face_is_shifted(bbox, normal_landmarks) == False
+    assert not face_is_shifted(bbox, normal_landmarks)
 
     # Test case: all landmarks shifted to the left
     left_shifted_landmarks = [
@@ -117,7 +116,7 @@ def test_face_utils():
         [40, 75],
     ]
 
-    assert face_is_shifted(bbox, left_shifted_landmarks) == True
+    assert face_is_shifted(bbox, left_shifted_landmarks)
 
     # Test case: all landmarks shifted to the right
     right_shifted_landmarks = [
@@ -128,7 +127,7 @@ def test_face_utils():
         [70, 75],
     ]
 
-    assert face_is_shifted(bbox, right_shifted_landmarks) == True
+    assert face_is_shifted(bbox, right_shifted_landmarks)
 
     # Test case: all landmarks shifted upward
     up_shifted_landmarks = [
@@ -139,7 +138,7 @@ def test_face_utils():
         [60, 55],
     ]
 
-    assert face_is_shifted(bbox, up_shifted_landmarks) == True
+    assert face_is_shifted(bbox, up_shifted_landmarks)
 
     # Test case: all landmarks shifted downward
     down_shifted_landmarks = [
@@ -150,7 +149,7 @@ def test_face_utils():
         [60, 85],
     ]
 
-    assert face_is_shifted(bbox, down_shifted_landmarks) == True
+    assert face_is_shifted(bbox, down_shifted_landmarks)
 
     # Test assertion error for wrong bbox format
     with pytest.raises(AssertionError):
@@ -195,7 +194,7 @@ def test_face_utils():
     ]
 
     # All landmarks have x >= center_x (50), so should be considered shifted
-    assert face_is_shifted(center_bbox, edge_case_landmarks) == True
+    assert face_is_shifted(center_bbox, edge_case_landmarks)
 
     # Test with floating point coordinates
     float_landmarks = [

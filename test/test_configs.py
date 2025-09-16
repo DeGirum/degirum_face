@@ -68,7 +68,7 @@ def test_config_face_recognition():
         )
 
         assert isinstance(config.face_filter_config, FaceFilterConfig)
-        assert config.face_filter_config.enable_small_face_filter == False
+        assert config.face_filter_config.enable_small_face_filter is False
         assert config.face_filter_config.min_face_size == 0
 
     # Test 3: from_settings method with valid configuration
@@ -107,10 +107,10 @@ def test_config_face_recognition():
             == "arcface_mobilefacenet--112x112_quant_n2x_orca1_1"
         )
         assert config.db._threshold == 0.6
-        assert config.face_filter_config.enable_small_face_filter == True
+        assert config.face_filter_config.enable_small_face_filter
         assert config.face_filter_config.min_face_size == 30
-        assert config.face_filter_config.enable_frontal_filter == True
-        assert config.face_filter_config.enable_reid_expiration_filter == True
+        assert config.face_filter_config.enable_frontal_filter
+        assert config.face_filter_config.enable_reid_expiration_filter
         assert config.face_filter_config.reid_expiration_frames == 20
 
     # Test 4: from_settings with hardware specification
@@ -158,7 +158,7 @@ face_filters:
   enable_shift_filter: true
   enable_reid_expiration_filter: true
   reid_expiration_frames: 15
-  
+
         """
 
         config, loaded_settings = FaceRecognitionConfig.from_yaml(yaml_str=yaml_str)
@@ -173,18 +173,18 @@ face_filters:
         )
         assert config.db._threshold == 0.7
         # Check all 5 face filters are enabled and configured correctly
-        assert config.face_filter_config.enable_small_face_filter == True
+        assert config.face_filter_config.enable_small_face_filter
         assert config.face_filter_config.min_face_size == 25
-        assert config.face_filter_config.enable_zone_filter == True
+        assert config.face_filter_config.enable_zone_filter
         assert config.face_filter_config.zone == [
             [10, 10],
             [200, 10],
             [200, 150],
             [10, 150],
         ]
-        assert config.face_filter_config.enable_frontal_filter == True
-        assert config.face_filter_config.enable_shift_filter == True
-        assert config.face_filter_config.enable_reid_expiration_filter == True
+        assert config.face_filter_config.enable_frontal_filter
+        assert config.face_filter_config.enable_shift_filter
+        assert config.face_filter_config.enable_reid_expiration_filter
         assert config.face_filter_config.reid_expiration_frames == 15
         assert isinstance(loaded_settings, dict)
 
@@ -403,7 +403,7 @@ database:
 storage:
   endpoint: "https://minio.example.com"
   access_key: "yaml_access_key"
-  secret_key: "yaml_secret_key" 
+  secret_key: "yaml_secret_key"
   bucket: "yaml_clips"
   url_expiration_s: 7200
         """
@@ -526,7 +526,7 @@ def test_config_face_tracking():
         # Verify FaceTrackingConfig specific attributes
         assert config.credence_count == 5
         assert config.alert_mode == AlertMode.ON_UNKNOWNS
-        assert config.alert_once == False
+        assert config.alert_once is False
         assert config.clip_duration == 150
         assert config.video_source == 1
         assert config.live_stream_mode == "WEB"
@@ -546,7 +546,7 @@ def test_config_face_tracking():
         # Verify default values
         assert config.credence_count == 4
         assert config.alert_mode == AlertMode.NONE
-        assert config.alert_once == True
+        assert config.alert_once
         assert config.clip_duration == 100
         assert config.notification_config == degirum_tools.notification_config_console
         assert (
@@ -606,7 +606,7 @@ def test_config_face_tracking():
         assert config.live_stream_rtsp_url == "my_custom_stream"
         assert config.credence_count == 8
         assert config.alert_mode == AlertMode.ON_ALL
-        assert config.alert_once == False
+        assert config.alert_once is False
         assert config.clip_duration == 200
         assert config.notification_config == "custom://notification"
         assert config.notification_message == "Custom alert: {time} - {filename}"
@@ -660,7 +660,7 @@ database:
 storage:
   endpoint: "https://minio.example.com"
   access_key: "yaml_access_key"
-  secret_key: "yaml_secret_key" 
+  secret_key: "yaml_secret_key"
   bucket: "yaml_clips"
   url_expiration_s: 7200
 video_source: "/path/to/video.mp4"
@@ -688,7 +688,7 @@ alerts:
         assert config.live_stream_rtsp_url == "yaml_stream"
         assert config.credence_count == 6
         assert config.alert_mode == AlertMode.ON_KNOWNS
-        assert config.alert_once == True
+        assert config.alert_once
         assert config.clip_duration == 120
         assert config.notification_config == "yaml://notification"
         assert config.notification_message == "YAML alert: {time}"
