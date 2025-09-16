@@ -1,0 +1,36 @@
+name: Tests
+run-name: Tests ${{ github.ref_name }}
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, reopen, synchronize, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Linters and Tests
+    strategy:
+      fail-fast: false
+      matrix:
+        python: [3.9, 3.12]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: pip install -e '.[build]'
+      - name: Run flake8
+        run: python3 -m flake8 .
+      - name: Run mypy
+        run: python3 -m mypy
+      # - name: Run pytest
+      #   run: python3 -m coverage run -m pytest -sv test/ --token=${{ secrets.CS_TOKEN }}
+      # - name: Display coverage report
+      #   run: python3 -m coverage report --omit=config*

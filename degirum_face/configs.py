@@ -340,9 +340,9 @@ additionalProperties: true
 
 
 @dataclass
-class FaceAnnotationConfig(FaceRecognitionConfig):
+class FaceClipManagerConfig(FaceRecognitionConfig):
     """
-    Configuration for face annotation.
+    Configuration for face clip management.
 
     Attributes:
         clip_storage_config (degirum_tools.ObjectStorageConfig): Storage configuration for video clips.
@@ -354,7 +354,7 @@ class FaceAnnotationConfig(FaceRecognitionConfig):
         )
     )
 
-    # Schema keys for FaceAnnotationConfig
+    # Schema keys for FaceClipManagerConfig
     key_storage = "storage"
     key_endpoint = "endpoint"
     key_access_key = "access_key"
@@ -391,39 +391,39 @@ additionalProperties: true
     """
 
     @staticmethod
-    def from_settings(settings: dict) -> "FaceAnnotationConfig":
+    def from_settings(settings: dict) -> "FaceClipManagerConfig":
         """
-        Create FaceAnnotationConfig from settings dictionary.
+        Create FaceClipManagerConfig from settings dictionary.
         Args:
             settings (dict): Configuration settings as loaded from YAML.
 
         """
 
         jsonschema.validate(
-            instance=settings, schema=yaml.safe_load(FaceAnnotationConfig.schema)
+            instance=settings, schema=yaml.safe_load(FaceClipManagerConfig.schema)
         )
 
         base_config = FaceRecognitionConfig.from_settings(settings)
 
-        storage_settings = settings[FaceAnnotationConfig.key_storage]
+        storage_settings = settings[FaceClipManagerConfig.key_storage]
         clip_storage_config = degirum_tools.ObjectStorageConfig(
-            endpoint=storage_settings[FaceAnnotationConfig.key_endpoint],
-            access_key=storage_settings[FaceAnnotationConfig.key_access_key],
-            secret_key=storage_settings[FaceAnnotationConfig.key_secret_key],
-            bucket=storage_settings[FaceAnnotationConfig.key_bucket],
+            endpoint=storage_settings[FaceClipManagerConfig.key_endpoint],
+            access_key=storage_settings[FaceClipManagerConfig.key_access_key],
+            secret_key=storage_settings[FaceClipManagerConfig.key_secret_key],
+            bucket=storage_settings[FaceClipManagerConfig.key_bucket],
             url_expiration_s=storage_settings[
-                FaceAnnotationConfig.key_url_expiration_s
+                FaceClipManagerConfig.key_url_expiration_s
             ],
         )
 
-        return FaceAnnotationConfig(
+        return FaceClipManagerConfig(
             **vars(base_config),
             clip_storage_config=clip_storage_config,
         )
 
 
 @dataclass
-class FaceTrackingConfig(FaceAnnotationConfig):
+class FaceTrackingConfig(FaceClipManagerConfig):
     """
     Configuration for face tracking.
 
@@ -434,6 +434,7 @@ class FaceTrackingConfig(FaceAnnotationConfig):
         clip_duration (int): Duration of the clip in frames for saving clips.
         notification_config (str): Apprise configuration string for notifications.
         notification_message (str): Message template for notifications.
+        notification_timeout_s (float): Timeout in seconds for sending notifications.
         video_source: Video source; can be integer number to use local camera, RTSP URL, or path to video file.
         live_stream_mode (str): Live stream mode: "LOCAL", "WEB", or "NONE".
         live_stream_rtsp_url (str): RTSP URL path for live stream (if mode is "WEB").
@@ -447,6 +448,7 @@ class FaceTrackingConfig(FaceAnnotationConfig):
     notification_message: str = (
         "{time}: Unknown person detected. Saved video: [{filename}]({url})"
     )
+    notification_timeout_s: Optional[float] = None
     video_source: Union[int, str] = 0
     live_stream_mode: str = "LOCAL"
     live_stream_rtsp_url: str = "face_tracking"
@@ -459,6 +461,7 @@ class FaceTrackingConfig(FaceAnnotationConfig):
     key_clip_duration = "clip_duration"
     key_notification_config = "notification_config"
     key_notification_message = "notification_message"
+    key_notification_timeout_s = "notification_timeout_s"
     key_video_source = "video_source"
     key_live_stream = "live_stream"
     key_live_stream_mode = "mode"
@@ -512,6 +515,9 @@ properties:
             {key_notification_message}:
                 type: string
                 description: "Message template for notifications"
+            {key_notification_timeout_s}:
+                type: number
+                description: "Timeout in seconds for sending notifications, if not defined, default timeout is applied"
         required:
             - {key_alert_mode}
         additionalProperties: false
@@ -534,7 +540,7 @@ additionalProperties: true
             instance=settings, schema=yaml.safe_load(FaceTrackingConfig.schema)
         )
 
-        base_config = FaceAnnotationConfig.from_settings(settings)
+        base_config = FaceClipManagerConfig.from_settings(settings)
 
         # Extract alerts settings
         alerts_settings = settings[FaceTrackingConfig.key_alerts]
@@ -552,6 +558,9 @@ additionalProperties: true
         notification_message = alerts_settings.get(
             FaceTrackingConfig.key_notification_message,
             "{time}: Unknown person detected. Saved video: [{filename}]({url})",
+        )
+        notification_timeout_s = alerts_settings.get(
+            FaceTrackingConfig.key_notification_timeout_s
         )
 
         # Extract video_source
@@ -574,6 +583,7 @@ additionalProperties: true
             clip_duration=clip_duration,
             notification_config=notification_config,
             notification_message=notification_message,
+            notification_timeout_s=notification_timeout_s,
             video_source=video_source,
             live_stream_mode=live_stream_mode,
             live_stream_rtsp_url=live_stream_rtsp_url,
