@@ -13,6 +13,23 @@ from pathlib import Path
 sys.path.insert(0, os.getcwd())
 
 
+def pytest_addoption(parser):
+    """Add command line parameters"""
+    parser.addoption(
+        "--token", action="store", default="", help="cloud server token value to use"
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cloud_token(request):
+    """Get cloud server token passed from the command line and install it system-wide"""
+    token = request.config.getoption("--token")
+    if token:
+        from degirum._tokens import TokenManager
+
+        TokenManager().token_install(token, True)
+
+
 @pytest.fixture()
 def temp_dir():
     """Create temporary directory for test databases and files"""

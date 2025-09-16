@@ -32,7 +32,7 @@ jobs:
           python3 -m flake8
           python3 -m mypy
           echo "-----------------------------Running tests--------------------------------"
-          python3 -m pytest -s -v
+          python3 -m pytest -sv test/ --token=${{ secrets.CS_TOKEN }}
           echo "-----------------------------Running build--------------------------------"
           python3 -m build .
 
