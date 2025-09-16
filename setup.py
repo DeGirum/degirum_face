@@ -25,7 +25,15 @@ setup(
         "lancedb >= 0.24.0",
     ],
     extras_require={
-        "build": ["twine", "build", "mypy", "flake8", "types-requests"],
+        "build": [
+            "twine",
+            "build",
+            "mypy",
+            "flake8",
+            "types-requests",
+            "coverage",
+            "pytest",
+        ],
     },
     include_package_data=True,
 )
